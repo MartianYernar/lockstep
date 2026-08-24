@@ -39,8 +39,19 @@ check. When you can't predict the ask, you can't stage the answer.
 - something in frame consistent with the block you planned
 
 **If you ignore it**, escalation starts on your phone and does not stop until a
-valid photo lands: vibration, a persistent notification, and a spoken siren that
-repeats every minute and gets more insistent as you fall further behind.
+valid photo lands:
+
+| Behind by | What the phone does |
+|---|---|
+| 0–5 min | nothing |
+| 5+ min | siren + vibration, once a minute |
+| 20+ min | twice a minute |
+| 40+ min | three times a minute |
+| 60+ min | four times a minute (the ceiling) |
+
+Escalation is **repetition, not volume**. It never gets louder than the level you
+set — falling further behind just makes it harder to sit through. There is no
+laptop component: the phone is the entire enforcement surface.
 
 The siren uses Android's **alarm stream** specifically — it ignores silent mode
 and Do Not Disturb, and has its own volume slider. So it is very hard to mute

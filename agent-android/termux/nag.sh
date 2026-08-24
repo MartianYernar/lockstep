@@ -61,6 +61,8 @@ while true; do
   MINUTES=$(echo "$RESP" | jq -r '.debt_minutes')
   HEADLINE=$(echo "$RESP"| jq -r '.headline')
   VOLPCT=$(echo "$RESP"  | jq -r '.alarm_volume_pct')
+  REPEATS=$(echo "$RESP" | jq -r '.alarm_repeats')
+  POLL=$(echo "$RESP"    | jq -r '.poll_sec')
 
   if [ "$ACTIVE" = "true" ] && [ "$ALARM" = "true" ]; then
     if [ "$WAS_ALARMING" = "0" ]; then
@@ -70,13 +72,19 @@ while true; do
     fi
 
     termux-volume alarm "$(target_alarm_volume "$VOLPCT")"
-    termux-vibrate -d 1500 -f
     termux-notification \
       --id lockstep --title "Lockstep — $MINUTES min behind" \
       --content "$HEADLINE" --priority max --alert-once false \
       --ongoing --action "termux-open-url https://t.me/$(jq -r '.bot_username // "" ' "$CONF")"
-    termux-tts-speak -s ALARM \
-      "Lockstep. You are $MINUTES minutes behind. $HEADLINE"
+
+    # Escalation is repetition, not volume: the further behind, the more times
+    # it goes off in the same minute. The level you set is never exceeded.
+    for _ in $(seq 1 "${REPEATS:-1}"); do
+      termux-vibrate -d 1500 -f
+      termux-tts-speak -s ALARM \
+        "Lockstep. You are $MINUTES minutes behind. $HEADLINE"
+      sleep 2
+    done
 
   else
     if [ "$WAS_ALARMING" = "1" ]; then

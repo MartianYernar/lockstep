@@ -42,18 +42,19 @@ offset:
   require_photo: true
 
 escalation:
+  # The phone is the entire enforcement surface. There is no laptop agent.
   step_minutes: 20             # escalation level goes up every this many minutes behind
-  phone_poll_sec: 60
+  phone_poll_sec: 60           # how often the phone asks the server how you're doing
   phone_alarm_after_min: 5     # start the alarm-stream siren after this much debt
   phone_alarm_volume_pct: 55   # % of the ALARM stream's max. Loud enough to be
                                # impossible to ignore, not so loud it's painful.
                                # Your ringtone and media volume are never touched.
 
-  # Retained so the agent contract stays stable; no laptop agent ships today.
-  laptop_cycle_sec: 120
-  base_windows: 1
-  extra_windows_per_step: 5
-  max_windows_open: 12
+  # Escalation is repetition, not volume: the siren stays at the percentage
+  # above, but goes off more times per minute the further behind you get.
+  phone_repeats_base: 1        # times it sounds per poll at level 0
+  phone_repeats_per_step: 1    # +this many per 20 minutes behind
+  phone_repeats_max: 4         # ceiling
 
 vision:
   timestamp_tolerance_min: 12  # how stale a visible clock may be

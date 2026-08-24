@@ -52,13 +52,18 @@ check("silent at 16:03 (inside grace)", [a.kind for a in tick(T(16, 3))], [])
 acts = tick(T(16, 6))
 check("missed at 16:06 (grace blown)", [a.kind for a in acts], ["mark_missed"])
 
-print("\n=== 4. escalation ladder (canvas: +5 windows per 20 min) ===")
-for at, want_lvl, want_win in [((16,6),0,1), ((16,24),0,1), ((16,25),1,6), ((16,26),1,6), ((16,46),2,11), ((17,6),3,12)]:
+print("\n=== 4. escalation ladder (repetition grows, volume does not) ===")
+# 16:06 is only 1 min behind — under phone_alarm_after_min, so silence.
+for at, want_lvl, want_rep in [((16,6),0,0), ((16,11),0,1), ((16,24),0,1), ((16,25),1,2),
+                                ((16,26),1,2), ((16,46),2,3), ((17,6),3,4)]:
     tick(T(*at))
     s = eng.agent_state(T(*at))
     check(f"{at[0]:02d}:{at[1]:02d} level", s.level, want_lvl)
-    check(f"{at[0]:02d}:{at[1]:02d} windows", s.windows, want_win)
-check("windows capped at max_windows_open", eng.agent_state(T(19, 0)).windows, 12)
+    check(f"{at[0]:02d}:{at[1]:02d} alarm repeats", s.alarm_repeats, want_rep)
+check("repeats capped", eng.agent_state(T(19, 0)).alarm_repeats, 4)
+check("silent below the alarm threshold", eng.agent_state(T(16, 8)).phone_alarm, False)
+check("...but the level is still tracked", eng.agent_state(T(16, 8)).active, True)
+check("volume never escalates", eng.agent_state(T(19, 0)).alarm_volume_pct, 55)
 check("phone alarm on after 5min", eng.agent_state(T(16, 12)).phone_alarm, True)
 
 print("\n=== 5. one valid photo clears debt, older stay missed ===")

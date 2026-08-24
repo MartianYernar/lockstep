@@ -13,9 +13,9 @@ RAW = {
                  "plan_nag_times": ["20:00"], "daily_report_at": "22:15"},
     "commitment": {"start": "2026-08-25", "months": 3, "total_months": 12},
     "offset": {"max_per_day": 1, "minutes": 60, "require_photo": True},
-    "escalation": {"laptop_cycle_sec": 120, "base_windows": 1, "extra_windows_per_step": 5,
-                   "step_minutes": 20, "max_windows_open": 12, "phone_poll_sec": 60,
-                   "phone_alarm_after_min": 5},
+    "escalation": {"step_minutes": 20, "phone_poll_sec": 60, "phone_alarm_after_min": 5,
+                   "phone_alarm_volume_pct": 55, "phone_repeats_base": 1,
+                   "phone_repeats_per_step": 1, "phone_repeats_max": 4},
     "vision": {"timestamp_tolerance_min": 12, "min_confidence": 0.55, "max_retries": 3},
     "api": {"host": "127.0.0.1", "port": 8765, "token": "t"},
 }

@@ -3,8 +3,9 @@
 More reliable than Termux, because MacroDroid is a normal foreground app that
 Android's battery manager already understands. About ten minutes of tapping.
 
-Install MacroDroid from the Play Store. The free tier caps you at five macros;
-this needs one.
+Install **MacroDroid** by **ArloSoft** (Jamie Arlott) from the Play Store — yes,
+that's the right one, it's the only MacroDroid worth having. The free tier caps
+you at five macros; this needs one.
 
 ---
 
@@ -39,6 +40,11 @@ this needs one.
 - The server decides how loud, so you can change it in `config.yaml` later
   without touching your phone.
 
+**4c. Set Variable — `repeats`** (integer)
+- Expression: `getJsonPath(resp, "$.alarm_repeats")`
+- How many times to sound off this minute. Grows the further behind you are —
+  the *volume* never changes.
+
 **5. IF `alarm_on` = true**  *(Logic → If/Else)*
 
 Inside the IF:
@@ -49,10 +55,13 @@ Inside the IF:
     Disturb, and has its own slider, so your ringtone, media and calls all keep
     working exactly as normal. It is set to just over half — loud enough that
     you cannot work through it, not so loud it hurts.*
-- **Media → Play Sound** (or Play/Stop Sound)
-  - Pick a genuinely irritating tone
-  - Stream: **Alarm**
-- **Device Actions → Vibrate** → pattern: *Long*
+- **Logic → Loop (Repeat)** → repeat `repeats` times, containing:
+  - **Media → Play Sound** — a genuinely irritating tone, Stream: **Alarm**
+  - **Device Actions → Vibrate** → pattern: *Long*
+  - **Logic → Wait Before Next Action** → 2 seconds
+  - *Escalation is repetition, not volume. At 20 minutes behind it fires twice
+    a minute, at 40 three times, capped at four. It never gets louder than the
+    percentage you set.*
 - **Notifications → Display Notification**
   - Title: `Lockstep — [lv=minutes] min behind`
   - Text: `[lv=headline]`

@@ -108,8 +108,8 @@ async def api_tests():
         body = await r.json()
         check("state has the agent contract",
               sorted(body.keys()),
-              ["active", "alarm_volume_pct", "cycle_sec", "debt_minutes", "detail",
-               "headline", "level", "phone_alarm", "windows"])
+              ["active", "alarm_repeats", "alarm_volume_pct", "debt_minutes",
+               "detail", "headline", "level", "phone_alarm", "poll_sec"])
         r = await client.get("/agent/state?token=t")
         check("query-string token works (for Tasker)", r.status, 200)
         r = await client.get("/health")

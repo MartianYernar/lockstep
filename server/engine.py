@@ -39,14 +39,14 @@ class Action:
 
 @dataclass
 class AgentState:
-    """What the laptop and phone agents poll for."""
+    """What the phone polls for. The phone is the whole enforcement surface."""
     active: bool
     level: int
     debt_minutes: int
-    windows: int
-    cycle_sec: int
     phone_alarm: bool
     alarm_volume_pct: int
+    alarm_repeats: int          # how many times to sound off per poll
+    poll_sec: int
     headline: str
     detail: str
 
@@ -55,10 +55,10 @@ class AgentState:
             "active": self.active,
             "level": self.level,
             "debt_minutes": self.debt_minutes,
-            "windows": self.windows,
-            "cycle_sec": self.cycle_sec,
             "phone_alarm": self.phone_alarm,
             "alarm_volume_pct": self.alarm_volume_pct,
+            "alarm_repeats": self.alarm_repeats,
+            "poll_sec": self.poll_sec,
             "headline": self.headline,
             "detail": self.detail,
         }
@@ -245,8 +245,10 @@ class Engine:
         lock = self.db.lock()
         day = now.date()
 
-        idle = AgentState(False, 0, 0, 0, int(self.cfg.esc["laptop_cycle_sec"]),
-                          False, int(self.cfg.esc.get("phone_alarm_volume_pct", 55)), "", "")
+        e0 = self.cfg.esc
+        idle = AgentState(False, 0, 0, False,
+                          int(e0.get("phone_alarm_volume_pct", 55)), 0,
+                          int(e0.get("phone_poll_sec", 60)), "", "")
         if not lock["enabled"]:
             return idle
         if lock["paused_until"] and now < datetime.fromisoformat(lock["paused_until"]):
@@ -261,8 +263,14 @@ class Engine:
         e = self.cfg.esc
         debt_min = debt // 60
         level = debt_min // int(e["step_minutes"])
-        windows = int(e["base_windows"]) + int(e["extra_windows_per_step"]) * level
-        windows = min(windows, int(e["max_windows_open"]))
+        # Escalation on a phone is repetition, not volume. The volume stays at
+        # the level you chose; what grows is how many times it goes off each
+        # poll, so falling further behind gets steadily harder to sit through
+        # without ever becoming painful.
+        repeats = min(
+            int(e.get("phone_repeats_base", 1)) + int(e.get("phone_repeats_per_step", 1)) * level,
+            int(e.get("phone_repeats_max", 4)),
+        )
 
         if not self.has_plan(day):
             headline = "No plan submitted for today"
@@ -275,11 +283,13 @@ class Engine:
                      if datetime.fromisoformat(c["due_at"]) <= now])
             detail = f"{n} checkpoint{'s' if n != 1 else ''} unanswered · {debt_min} min behind"
 
+        alarming = debt_min >= int(e["phone_alarm_after_min"])
         return AgentState(
             active=True, level=int(level), debt_minutes=int(debt_min),
-            windows=int(windows), cycle_sec=int(e["laptop_cycle_sec"]),
-            phone_alarm=debt_min >= int(e["phone_alarm_after_min"]),
+            phone_alarm=alarming,
             alarm_volume_pct=int(e.get("phone_alarm_volume_pct", 55)),
+            alarm_repeats=int(repeats) if alarming else 0,
+            poll_sec=int(e.get("phone_poll_sec", 60)),
             headline=headline, detail=detail,
         )
 

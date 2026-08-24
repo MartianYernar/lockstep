@@ -568,8 +568,8 @@ class LockstepBot:
             await self.send_user(
                 f"🔺 <b>{st.debt_minutes} minutes behind.</b> {html.escape(st.headline)}\n"
                 f"{html.escape(st.detail)}\n\n"
-                f"Your laptop is now opening {st.windows} windows every "
-                f"{st.cycle_sec // 60} minutes.")
+                f"Your phone is now sounding {st.alarm_repeats}× a minute on the alarm "
+                f"stream. It stops the moment a valid photo lands.")
         elif not st.active:
             self.last_level = 0
 
