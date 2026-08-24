@@ -1,0 +1,22 @@
+services:
+  lockstep:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: lockstep
+    # The whole point is that it comes back by itself. A reboot, a crash, an OOM
+    # kill -- none of them should quietly end the commitment.
+    restart: always
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/data
+      - ./data/photos:/app/photos
+    environment:
+      # Prefer env vars over the config file for secrets on a shared box.
+      - LOCKSTEP_BOT_TOKEN=${LOCKSTEP_BOT_TOKEN:-}
+      - LOCKSTEP_GEMINI_KEY=${LOCKSTEP_GEMINI_KEY:-}
+      - LOCKSTEP_API_TOKEN=${LOCKSTEP_API_TOKEN:-}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# Lockstep configuration.  Copy to config.yaml and fill in.
+# config.yaml is gitignored -- it holds live secrets.
+# ---------------------------------------------------------------------------
+
+timezone: Asia/Almaty
+
+telegram:
+  bot_token: "PUT_BOTFATHER_TOKEN_HERE"
+  user_chat_id: 0          # your numeric Telegram id      (get from @userinfobot)
+  guardian_chat_id: 0      # your father's numeric Telegram id
+
+gemini:
+  api_key: "PUT_GEMINI_KEY_HERE"
+  model: "gemini-2.5-flash"
+
+schedule:
+  enforce_start: "16:00"          # proof window opens
+  enforce_end:   "22:00"          # proof window closes
+
+  # spot_check = unpredictable checks inside each planned block (recommended:
+  #   you can't stage a photo for a moment you can't predict)
+  # fixed      = every N minutes, predictable
+  mode: spot_check
+  spot_check_avg_min: 45          # roughly one check per this much planned time
+  spot_check_min_gap_min: 20      # never two checks closer than this
+  checkpoint_interval_min: 15     # only used when mode: fixed
+
+  grace_min: 5                    # how long you get to answer before it counts as ignoring
+  plan_due: "23:30"               # tomorrow's plan must be submitted by this time
+  plan_nag_times: ["20:00", "21:30", "23:00"]
+  daily_report_at: "22:15"
+
+commitment:
+  start: "2026-08-25"       # day one
+  months: 3                 # you cannot disable before start + this many months
+  total_months: 12          # the full run you're aiming at
+
+offset:
+  max_per_day: 1
+  minutes: 60
+  require_photo: true
+
+escalation:
+  step_minutes: 20             # escalation level goes up every this many minutes behind
+  phone_poll_sec: 60
+  phone_alarm_after_min: 5     # start the alarm-stream siren after this much debt
+  phone_alarm_volume_pct: 55   # % of the ALARM stream's max. Loud enough to be
+                               # impossible to ignore, not so loud it's painful.
+                               # Your ringtone and media volume are never touched.
+
+  # Retained so the agent contract stays stable; no laptop agent ships today.
+  laptop_cycle_sec: 120
+  base_windows: 1
+  extra_windows_per_step: 5
+  max_windows_open: 12
+
+vision:
+  timestamp_tolerance_min: 12  # how stale a visible clock may be
+  min_confidence: 0.55
+  max_retries: 3
+
+  # Cold Turkey proof for laptop work.  A photo proves a moment, not an
+  # interval -- you could open the right tab, snap, and switch straight back.
+  # With this on, the first check of every `work` block must be a FULL-SCREEN
+  # screenshot showing Cold Turkey blocking, its timer running, the allowlist,
+  # and the taskbar clock.  Turn on when you're on the Windows laptop.
+  require_blocker_for_work: false
+  blocker_name: "Cold Turkey"
+
+api:
+  host: "0.0.0.0"
+  port: 8765
+  token: "CHANGE_ME_TO_A_LONG_RANDOM_STRING"

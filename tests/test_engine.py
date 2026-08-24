@@ -1,0 +1,175 @@
+"""Simulated day: does the state machine actually behave?"""
+import sys, os, tempfile
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fixtures import build, check, report
+from server.ledger import Ledger
+from server import planner
+
+
+TZ = ZoneInfo("Asia/Almaty")
+DAY = date(2026, 8, 25)
+def T(h, m): return datetime(2026, 8, 25, h, m, tzinfo=TZ)
+
+cfg, db, _led, eng, _lk = build()
+
+def tick(t):
+    """tick() as a live server sees it: 30 seconds since the last one."""
+    db.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat())
+    return eng.tick(t)
+
+db.set_lock(enabled=1, commitment_end="2026-11-25")
+db.ensure_day(DAY)
+
+
+print("\n=== 1. no plan at 16:00 => plan_missing + debt starts ===")
+acts = tick(T(16, 0))
+check("action kinds", [a.kind for a in acts], ["plan_missing"])
+st = eng.agent_state(T(16, 30))
+check("no-plan active", st.active, True)
+check("no-plan debt", st.debt_minutes, 30)
+check("no-plan headline", st.headline, "No plan submitted for today")
+
+print("\n=== 2. submit plan, checkpoints materialise ===")
+blocks = planner.parse("""16:00-16:40 commute to MNU library
+16:40-19:00 work: linear algebra pset
+19:00-19:30 gym
+19:30-22:00 work: essay""")
+planner.validate_coverage(blocks, 16*60, 22*60)
+db.replace_blocks(DAY, [b.as_tuple() for b in blocks])
+db.run("UPDATE days SET plan_locked=1, plan_submitted_at=? WHERE date=?", (T(15,0).isoformat(), DAY.isoformat()))
+n = eng.build_checkpoints(DAY)
+check("checkpoints for 16:00-22:00 @15min", n, 24)
+check("debt cleared once planned", eng.debt_seconds(DAY, T(16, 30)), 0)
+
+print("\n=== 3. asking + grace ===")
+acts = tick(T(16, 0))
+check("asks at 16:00", [a.kind for a in acts], ["ask"])
+check("asks for the right block", acts[0].payload["label"], "commute to MNU library")
+check("silent at 16:03 (inside grace)", [a.kind for a in tick(T(16, 3))], [])
+acts = tick(T(16, 6))
+check("missed at 16:06 (grace blown)", [a.kind for a in acts], ["mark_missed"])
+
+print("\n=== 4. escalation ladder (canvas: +5 windows per 20 min) ===")
+for at, want_lvl, want_win in [((16,6),0,1), ((16,24),0,1), ((16,25),1,6), ((16,26),1,6), ((16,46),2,11), ((17,6),3,12)]:
+    tick(T(*at))
+    s = eng.agent_state(T(*at))
+    check(f"{at[0]:02d}:{at[1]:02d} level", s.level, want_lvl)
+    check(f"{at[0]:02d}:{at[1]:02d} windows", s.windows, want_win)
+check("windows capped at max_windows_open", eng.agent_state(T(19, 0)).windows, 12)
+check("phone alarm on after 5min", eng.agent_state(T(16, 12)).phone_alarm, True)
+
+print("\n=== 5. one valid photo clears debt, older stay missed ===")
+now = T(17, 10)
+tick(now)
+cp = eng.current_checkpoint(DAY, now)
+check("current cp is the 17:00 one", cp["due_at"][11:16], "17:00")
+res = eng.satisfy(DAY, now, cp["id"], '{"ok":true}', None)
+check("older open ones swept to missed", res["swept"] >= 4, True)
+check("debt is zero after valid photo", eng.debt_seconds(DAY, now), 0)
+check("agent goes idle", eng.agent_state(now).active, False)
+sc = eng.score(DAY, now)
+print("   score:", sc)
+check("one hit recorded", sc["hit"], 1)
+
+print("\n=== 6. outside window is always idle ===")
+check("15:59 idle", eng.agent_state(T(15, 59)).active, False)
+check("22:30 idle", eng.agent_state(T(22, 30)).active, False)
+
+print("\n=== 7. offset shifts the day ===")
+before_end = eng.window(DAY)[1]
+r = eng.apply_offset(DAY, T(18, 0), 60, "met homies after class")
+check("window extended by 60", eng.window(DAY)[1], before_end + 60)
+check("checkpoints excused", r["excused"] > 0, True)
+# The count of "added" stopped meaning anything once apply_offset started
+# clearing future checkpoints and rebuilding (it has to, or a shifted block
+# leaves orphans at its old times). Assert the property that actually matters.
+_cps = eng.checkpoints(DAY)
+_last = max(datetime.fromisoformat(c["due_at"]) for c in _cps)
+check("checkpoints reach the extended window", _last.hour * 60 + _last.minute >= 22*60 + 45, True)
+check("no duplicate due times", len({c["due_at"] for c in _cps}), len(_cps))
+check("nothing scheduled past the new window end",
+      max(datetime.fromisoformat(c["due_at"]).hour * 60 +
+          datetime.fromisoformat(c["due_at"]).minute for c in _cps) < eng.window(DAY)[1], True)
+check("no debt during the offset hour", eng.debt_seconds(DAY, T(18, 40)), 0)
+b = db.blocks(DAY)
+check("gym block slid +60 (19:00->20:00)", [x["start_min"] for x in b if x["label"]=="gym"], [20*60])
+
+print("\n=== 8. ledger tamper detection ===")
+led = Ledger(db)
+for k in ("plan_submitted", "checkpoint_satisfied", "offset_used"):
+    led.append(k, {"day": DAY.isoformat()})
+check("chain verifies", led.verify(), (True, None))
+db.run("UPDATE events SET payload='{\"day\":\"1999-01-01\"}' WHERE id=2")
+ok, bad = led.verify()
+check("tamper detected", ok, False)
+check("points at the edited row", bad, 2)
+
+print("\n=== 9. outage amnesty: a reboot must not manufacture debt ===")
+cfg2, db2, led2, eng2, _ = build()
+db2.set_lock(enabled=1, commitment_end="2099-01-01")
+db2.ensure_day(DAY)
+bl = planner.parse("16:00-22:00 work: essay")
+db2.replace_blocks(DAY, [b.as_tuple() for b in bl])
+db2.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng2.build_checkpoints(DAY)
+
+eng2.tick(T(16, 0))                       # normal tick; records last_tick_at
+check("first tick asks", len(eng2.checkpoints(DAY)), 24)
+db2.set_lock(last_tick_at=T(16, 2).isoformat())   # ...then the server dies
+
+acts = eng2.tick(T(17, 32))               # 90 minutes later it comes back
+kinds = [a.kind for a in acts]
+check("amnesty raised on restart", "outage_amnesty" in kinds, True)
+am = next(a for a in acts if a.kind == "outage_amnesty").payload
+check("outage length reported", am["minutes"], 90)
+check("the whole gap is voided", am["excused"], 7)   # 16:00 through 17:30
+check("no debt manufactured by the outage", eng2.debt_seconds(DAY, T(17, 32)), 0)
+check("agent stays idle after a reboot", eng2.agent_state(T(17, 32)).active, False)
+check("no flood of backlogged asks", len([k for k in kinds if k == "ask"]) <= 1, True)
+
+st = {c["state"] for c in eng2.checkpoints(DAY)
+      if T(16, 0) <= datetime.fromisoformat(c["due_at"]) < T(17, 30)}
+check("gap checkpoints are excused, not missed", st, {"excused"})
+check("excused never count against the score", eng2.score(DAY, T(17, 32))["missed"], 0)
+
+eng2.tick(T(17, 33))                      # a normal 1-minute tick after recovery
+check("no amnesty on a normal tick",
+      "outage_amnesty" in [a.kind for a in eng2.tick(T(17, 34))], False)
+
+print("\n=== 10. the tick runs every 30s — nothing may flood ===")
+cfg3, db3, led3, eng3, _ = build()
+db3.set_lock(enabled=1, commitment_end="2026-08-25")   # already expired
+db3.ensure_day(DAY)
+counts = {}
+t = T(16, 0)
+for _ in range(120):                                   # one full hour of ticks
+    db3.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat())
+    for a in eng3.tick(t):
+        counts[a.kind] = counts.get(a.kind, 0) + 1
+    t += timedelta(seconds=30)
+check("plan_missing throttled to 1 per 10 min", counts.get("plan_missing"), 6)
+check("commitment_over fires exactly once ever", counts.get("commitment_over"), 1)
+
+# plan nags: after the window, at each configured nag time, once each.
+cfg4, db4, led4, eng4, _ = build()
+db4.set_lock(enabled=1, commitment_end="2099-01-01")
+db4.ensure_day(DAY)
+# Today must be planned, or tick() returns early on plan_missing and never
+# reaches the nag for tomorrow. Tomorrow stays unplanned, which is the point.
+bl4 = planner.parse("16:00-22:00 work: essay")
+db4.replace_blocks(DAY, [b.as_tuple() for b in bl4])
+db4.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng4.build_checkpoints(DAY)
+check("tomorrow is unplanned", eng4.has_plan(DAY + timedelta(days=1)), False)
+nags = 0
+t = T(19, 58)
+for _ in range(20):                                    # 19:58 -> 20:03
+    db4.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat())
+    nags += len([a for a in eng4.tick(t) if a.kind == "plan_nag"])
+    t += timedelta(seconds=30)
+check("one plan_nag per configured nag time", nags, 1)
+
+sys.exit(report("ENGINE TESTS"))

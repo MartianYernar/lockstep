@@ -1,0 +1,11 @@
+python-telegram-bot[job-queue]==21.9
+google-genai==0.8.0
+PyYAML==6.0.2
+aiohttp==3.11.11
+bcrypt==4.2.1
+
+# google-genai pulls in google-auth -> cryptography. Current cryptography has no
+# wheel for Python 3.9 and falls back to a Rust build that fails on macOS.
+# 44.x is the last release shipping a cp39 wheel. On the VPS (3.12) this marker
+# is inactive and pip takes the latest.
+cryptography<45; python_version < "3.10"

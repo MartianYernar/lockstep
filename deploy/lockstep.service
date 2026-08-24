@@ -1,0 +1,27 @@
+# Bare-metal alternative to Docker. Put this at
+#   /etc/systemd/system/lockstep.service
+# then: systemctl daemon-reload && systemctl enable --now lockstep
+[Unit]
+Description=Lockstep accountability server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lockstep
+WorkingDirectory=/opt/lockstep
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/lockstep.env
+ExecStart=/opt/lockstep/.venv/bin/python -m server.main
+Restart=always
+RestartSec=10
+
+# Least privilege: it needs its own directory and the network, nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/lockstep
+
+[Install]
+WantedBy=multi-user.target
