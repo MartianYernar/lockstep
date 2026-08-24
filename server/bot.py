@@ -136,8 +136,9 @@ class LockstepBot:
                else f"every {self.cfg.interval_min} min")
             + f" · {self.cfg.grace_min} min grace",
             f"Guardian password: {'set' if self.lock.is_configured else '⚠️ NOT SET'}",
-            f"Commitment: {self.lock.days_remaining(today)} days left "
-            f"(until {row['commitment_end'] or '—'})",
+            (f"Commitment: {self.lock.days_remaining(today)} days left "
+             f"(until {row['commitment_end']})") if row["commitment_end"]
+            else "Commitment: none — trial mode, you can stop any time",
             f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'}",
         ]
         if self.engine.has_plan(today):

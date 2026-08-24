@@ -8,12 +8,19 @@ About an hour end to end. Do it in this order — each step depends on the last.
 
 1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → follow the prompts.
    Keep the token it gives you.
-2. You and your father both message [@userinfobot](https://t.me/userinfobot).
-   It replies with a numeric ID for each of you.
-3. **Both of you must send `/start` to your new bot at least once.** Telegram
+2. **Both of you must send `/start` to your new bot at least once.** Telegram
    will not let a bot message someone who has never opened a chat with it. If
    you skip this, the guardian messages silently fail and you will not find out
    until the night you need them.
+3. Read the chat IDs straight off your own bot:
+
+   ```bash
+   python3 scripts/setup-ids.py --write
+   ```
+
+   It watches for two minutes, prints whoever messages the bot, and offers to
+   write the IDs into `config.yaml`. Less error-prone than copying numbers by
+   hand from a third-party bot.
 
 ## 2. Gemini API key — 2 min
 

@@ -73,11 +73,12 @@ class Lock:
 
     def _store(self, password: str) -> None:
         digest = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        end = self.cfg.commitment_end()
         self.db.set_lock(
             guardian_hash=digest,
             guardian_set_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             failed_attempts=0,
-            commitment_end=self.cfg.commitment_end().isoformat(),
+            commitment_end=end.isoformat() if end else None,
         )
 
     def _matches(self, password: str) -> bool:

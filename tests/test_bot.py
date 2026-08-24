@@ -1,0 +1,185 @@
+"""Exercise the Telegram layer with fake Updates — no network, no token.
+
+bot.py is the biggest module and the one a user actually touches, so the
+conversational flows (plan submission, the disable gauntlet, offsets) get
+driven here rather than trusted.
+"""
+import asyncio, os, sys, types
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fixtures import build, check, report, spot_raw
+from server.bot import LockstepBot
+from server.vision import Verdict
+
+TZ = ZoneInfo("Asia/Almaty")
+USER, GUARDIAN = 1, 2
+
+
+class FakeMessage:
+    def __init__(self, text=None, chat_id=USER):
+        self.text = text
+        self.replies: list[str] = []
+        self.deleted = False
+        self.photo = []
+        self.chat = types.SimpleNamespace(
+            id=chat_id, send_action=self._noop_action)
+    async def _noop_action(self, *_a, **_k): return None
+    async def reply_text(self, t, **_kw): self.replies.append(t); return None
+    async def delete(self): self.deleted = True
+    @property
+    def last(self): return self.replies[-1] if self.replies else ""
+
+
+class FakeUpdate:
+    def __init__(self, text=None, chat_id=USER):
+        self.message = FakeMessage(text, chat_id)
+        self.effective_chat = types.SimpleNamespace(id=chat_id)
+
+
+class FakeBot:
+    def __init__(self): self.sent: list[tuple[int, str]] = []
+    async def send_message(self, chat_id, text, **_kw):
+        self.sent.append((chat_id, text)); return None
+    def to(self, chat_id): return [t for c, t in self.sent if c == chat_id]
+
+
+class StubValidator:
+    """Stands in for Gemini so the bot layer can be tested without a key."""
+    def __init__(self): self.verdict = Verdict(ok=True, reason="Counted.", failure_code="ok")
+    async def check(self, *_a, **_kw): return self.verdict
+
+
+def make():
+    cfg, db, led, eng, lk = build()
+    val = StubValidator()
+    bot = LockstepBot(cfg, db, led, eng, lk, val)
+    bot.app = types.SimpleNamespace(bot=FakeBot())
+    db.set_lock(enabled=1, commitment_end="2099-01-01")
+    return cfg, db, led, eng, lk, bot, val
+
+
+run = asyncio.get_event_loop().run_until_complete
+GOOD = """16:00-19:00 work: linear algebra pset
+19:00-20:00 gym
+20:00-22:00 work: essay draft"""
+
+print("\n=== /plan: multiline after the command ===")
+cfg, db, led, eng, lk, bot, val = make()
+# Capture the target BEFORE submitting: once today is planned,
+# target_plan_date() correctly rolls forward to tomorrow.
+target = bot.target_plan_date(cfg.now())
+u = FakeUpdate("/plan\n" + GOOD)
+run(bot.cmd_plan(u, None))
+check("plan accepted", "Locked in" in u.message.last, True)
+check("blocks stored", len(db.blocks(target)), 3)
+check("plan is locked", eng.has_plan(target), True)
+check("target rolls to tomorrow once today is planned",
+      bot.target_plan_date(cfg.now()) > target, True)
+
+print("\n=== /plan: gaps are refused with the gap named ===")
+cfg, db, led, eng, lk, bot, val = make()
+u = FakeUpdate("/plan\n16:00-17:00 work\n18:00-22:00 relax")
+run(bot.cmd_plan(u, None))
+check("refused", u.message.last.startswith("❌"), True)
+check("names the actual gap", "17:00-18:00" in u.message.last, True)
+check("nothing was stored", len(db.blocks(bot.target_plan_date(cfg.now()))), 0)
+
+print("\n=== /plan: bare command prompts, then the next message is the plan ===")
+cfg, db, led, eng, lk, bot, val = make()
+u1 = FakeUpdate("/plan")
+run(bot.cmd_plan(u1, None))
+check("prompts for the plan", "one block per line" in u1.message.last, True)
+check("pending state set", bot.pending[USER]["action"], "plan")
+u2 = FakeUpdate(GOOD)
+run(bot.on_text(u2, None))
+check("free text accepted as the plan", "Locked in" in u2.message.last, True)
+check("pending cleared", USER in bot.pending, False)
+
+print("\n=== the disable gauntlet ===")
+cfg, db, led, eng, lk, bot, val = make()
+lk._setup_token = "ABC123"
+lk.complete_setup("ABC123", "father-password", GUARDIAN)
+bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
+
+u = FakeUpdate("/disable")
+run(bot.cmd_disable(u, None))
+check("asks for a reason first", "reason" in u.message.last.lower(), True)
+# The prompt *mentions* the password to explain what's coming; what matters is
+# that it will not accept one yet.
+check("is not yet accepting a password", bot.pending[USER]["action"], "disable_reason")
+
+u2 = FakeUpdate("too short")
+run(bot.on_text(u2, None))
+check("a throwaway reason is refused", "Longer" in u2.message.last, True)
+check("still awaiting the reason", bot.pending[USER]["action"], "disable_reason")
+
+u3 = FakeUpdate("i have a fever and cannot do any of this today")
+run(bot.on_text(u3, None))
+g = bot.app.bot.to(GUARDIAN)
+check("father is told BEFORE the password step", len(g), 1)
+check("his exact words are forwarded", "fever and cannot do any of this" in g[0], True)
+check("now asks for the password", bot.pending[USER]["action"], "disable_password")
+
+u4 = FakeUpdate("wrong-guess")
+run(bot.on_text(u4, None))
+check("wrong password rejected", "Wrong" in u4.message.last, True)
+check("password message deleted from the chat", u4.message.deleted, True)
+check("system still on", lk.enabled, True)
+check("father told about the failed attempt", len(bot.app.bot.to(GUARDIAN)), 2)
+
+u5 = FakeUpdate("father-password")
+run(bot.on_text(u5, None))
+check("correct password turns it off", lk.enabled, False)
+check("father told it went off", "turned OFF" in bot.app.bot.to(GUARDIAN)[-1], True)
+
+u6 = FakeUpdate("/enable")
+run(bot.cmd_enable(u6, None))
+check("re-enabling needs no password", lk.enabled, True)
+
+print("\n=== /offset: one per day, reason then photo ===")
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+db.ensure_day(today)
+db.replace_blocks(today, [(16*60, 22*60, "work: essay", "work")])
+db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
+eng.build_checkpoints(today)
+
+u = FakeUpdate("/offset x")
+run(bot.cmd_offset(u, None))
+check("a one-word reason is refused", "actually happened" in u.message.last, True)
+
+u = FakeUpdate("/offset stayed back for a department meeting after class")
+run(bot.cmd_offset(u, None))
+in_window = eng.in_window(cfg.now())
+if in_window:
+    check("asks for photo proof", "send one photo" in u.message.last.lower(), True)
+    check("pending proof state", bot.pending[USER]["action"], "offset_proof")
+else:
+    check("outside the window it declines", "isn't open" in u.message.last, True)
+    print("       (running outside 16:00-22:00, so the offset path is inert — correct)")
+
+print("\n=== guardian-only commands reject the user ===")
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
+u = FakeUpdate("/pause 24 whatever", chat_id=USER)
+run(bot.cmd_pause(u, None))
+check("user cannot pause", "Only the guardian" in u.message.last, True)
+check("not actually paused", db.lock()["paused_until"], None)
+
+ug = FakeUpdate("/pause 24 he has a fever", chat_id=GUARDIAN)
+run(bot.cmd_pause(ug, None))
+check("guardian can pause", "Paused until" in ug.message.last, True)
+check("pause recorded", db.lock()["paused_until"] is not None, True)
+
+print("\n=== status renders without blowing up ===")
+cfg, db, led, eng, lk, bot, val = make()
+u = FakeUpdate("/status")
+run(bot.cmd_status(u, None))
+check("status produced", len(u.message.last) > 40, True)
+check("mentions the guardian password state", "Guardian password" in u.message.last, True)
+check("reports the log integrity", "Log:" in u.message.last, True)
+print("      ", u.message.last.replace("\n", "\n       "))
+
+sys.exit(report("BOT TESTS"))

@@ -49,8 +49,10 @@ def main() -> None:
         log.warning(banner)
 
     if not lock.db.lock()["commitment_end"]:
-        db.set_lock(commitment_end=cfg.commitment_end().isoformat())
-    log.info("commitment runs until %s", db.lock()["commitment_end"])
+        end = cfg.commitment_end()
+        if end:
+            db.set_lock(commitment_end=end.isoformat())
+    log.info("commitment: %s", db.lock()["commitment_end"] or "none set (trial mode)")
 
     app = bot.build()
 
@@ -73,9 +75,11 @@ def main() -> None:
     app.post_init = _post_init
     app.post_shutdown = _post_shutdown
 
-    log.info("lockstep up — window %02d:%02d-%02d:%02d every %d min",
+    cadence = (f"random spot-checks ~1 per {cfg.spot_avg_min} min"
+               if cfg.mode == "spot_check" else f"every {cfg.interval_min} min")
+    log.info("lockstep up — window %02d:%02d-%02d:%02d, %s",
              cfg.enforce_start_min // 60, cfg.enforce_start_min % 60,
-             cfg.enforce_end_min // 60, cfg.enforce_end_min % 60, cfg.interval_min)
+             cfg.enforce_end_min // 60, cfg.enforce_end_min % 60, cadence)
     app.run_polling(drop_pending_updates=True)
 
 

@@ -113,9 +113,12 @@ class Config:
         """Local datetime for `minutes` past midnight on `day`."""
         return datetime.combine(day, time(0, 0), tzinfo=self.tz) + timedelta(minutes=minutes)
 
-    def commitment_end(self) -> date:
+    def commitment_end(self) -> date | None:
+        """None when months is 0 -- that means *no* lock, not one that already expired."""
         start = date.fromisoformat(str(self.raw["commitment"]["start"]))
         months = int(self.raw["commitment"]["months"])
+        if months <= 0:
+            return None
         year = start.year + (start.month - 1 + months) // 12
         month = (start.month - 1 + months) % 12 + 1
         day = min(start.day, [31, 29 if year % 4 == 0 and (year % 100 or year % 400 == 0) else 28,

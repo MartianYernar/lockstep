@@ -63,6 +63,20 @@ later = NOW + timedelta(minutes=31)
 check("lockout expires after 30 min", lk.verify("correcthorsebattery", later), True)
 check("counter reset on success", db.lock()["failed_attempts"], 0)
 
+print("\n=== months: 0 means no lock, not an expired one ===")
+import copy
+from fixtures import RAW
+trial = copy.deepcopy(RAW); trial["commitment"]["months"] = 0
+tcfg, tdb, tled, teng, tlk = build(trial)
+check("no commitment end computed", tcfg.commitment_end(), None)
+tlk._setup_token = "T"; tlk.complete_setup("T", "trialpassword", 2)
+check("nothing stamped in the db", tdb.lock()["commitment_end"], None)
+check("commitment not active", tlk.commitment_active(date(2026, 8, 25)), False)
+from datetime import datetime as _dt
+from zoneinfo import ZoneInfo as _Z
+kinds0 = [a.kind for a in teng.tick(_dt(2026, 8, 25, 12, 0, tzinfo=_Z("Asia/Almaty")))]
+check("no bogus 'commitment over' message", "commitment_over" in kinds0, False)
+
 print("\n=== commitment window ===")
 check("commitment end recorded", db.lock()["commitment_end"], "2026-11-25")
 check("active during period", lk.commitment_active(date(2026, 9, 1)), True)
