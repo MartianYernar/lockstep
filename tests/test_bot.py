@@ -182,4 +182,40 @@ check("mentions the guardian password state", "Guardian password" in u.message.l
 check("reports the log integrity", "Log:" in u.message.last, True)
 print("      ", u.message.last.replace("\n", "\n       "))
 
+print("\n=== a late plan is confirmed honestly, not with a fake first-photo time ===")
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+# Pretend it is 18:56 and the window opened at 16:00.
+import server.config as _c
+real_now = cfg.now
+cfg.now = lambda: datetime.combine(today, datetime.min.time(),
+                                   tzinfo=cfg.tz).replace(hour=18, minute=56)
+u = FakeUpdate("/plan\n16:00-19:00 work: linear algebra pset\n19:00-22:00 work: essay")
+run(bot.cmd_plan(u, None))
+msg = u.message.last
+check("accepted", "Locked in" in msg, True)
+check("says the passed slots are void", "void" in msg, True)
+check("does not claim a first photo at 16:00", "at <b>16:0" in msg, False)
+print("      ", msg.split("\n\n")[-1].replace("\n", "\n       "))
+cfg.now = real_now
+
+print("\n=== duplicate nags collapse into one message ===")
+from server.engine import Action
+merged = bot._merge([
+    Action("mark_missed", {"checkpoint_id": 1, "label": "work: linear algebra pset"}),
+    Action("mark_missed", {"checkpoint_id": 2, "label": "work: linear algebra pset"}),
+])
+check("two misses become one action", len([a for a in merged if a.kind == "mark_missed"]), 1)
+check("count preserved", merged[0].payload["count"], 2)
+check("identical labels deduped", merged[0].payload["labels"], ["work: linear algebra pset"])
+
+merged2 = bot._merge([
+    Action("ask", {"checkpoint_id": 1, "label": "a", "category": "work", "due_at": "2026-08-25T16:00:00+05:00"}),
+    Action("ask", {"checkpoint_id": 2, "label": "b", "category": "work", "due_at": "2026-08-25T17:00:00+05:00"}),
+])
+asks = [a for a in merged2 if a.kind == "ask"]
+check("two asks become one", len(asks), 1)
+check("keeps the newest", asks[0].payload["checkpoint_id"], 2)
+check("mentions the other", asks[0].payload["also_due"], 1)
+
 sys.exit(report("BOT TESTS"))

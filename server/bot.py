@@ -194,15 +194,23 @@ class LockstepBot:
             " WHERE date = ?", (now.isoformat(), target.isoformat()))
         self.db.run("DELETE FROM checkpoints WHERE date = ? AND state = 'scheduled'",
                     (target.isoformat(),))
-        made = self.engine.build_checkpoints(target)
+        built = self.engine.build_checkpoints(target, now)
         self.ledger.append("plan_submitted",
-                           {"date": target.isoformat(), "blocks": len(blocks)})
+                           {"date": target.isoformat(), "blocks": len(blocks),
+                            "live": built["live"], "voided": built["voided"]})
         self.pending.pop(update.effective_chat.id, None)
 
+        tail = f"{built['live']} checkpoint{'s' if built['live'] != 1 else ''} ahead of you."
+        if built["voided"]:
+            tail += (f"\n({built['voided']} fell before you sent this and are void — "
+                     "you can't photograph the past.)")
+        if built["first"]:
+            tail += f"\nFirst photo at <b>{datetime.fromisoformat(built['first']):%H:%M}</b>."
+        else:
+            tail += "\nNothing left today — this plan starts tomorrow."
+
         await update.message.reply_text(
-            f"✅ Locked in for <b>{target:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n"
-            f"{made} checkpoints. First photo at "
-            f"{self.cfg.at(target, start):%H:%M}.",
+            f"✅ Locked in for <b>{target:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n{tail}",
             parse_mode=ParseMode.HTML)
 
     async def cmd_today(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -547,7 +555,7 @@ class LockstepBot:
             log.exception("tick failed: %s", exc)
             return
 
-        for act in actions:
+        for act in self._merge(actions):
             try:
                 await self._dispatch(act, now)
             except Exception as exc:                          # noqa: BLE001
@@ -565,6 +573,37 @@ class LockstepBot:
         elif not st.active:
             self.last_level = 0
 
+    @staticmethod
+    def _merge(actions: list) -> list:
+        """Collapse same-kind actions from one tick into one message each.
+
+        Two checkpoints going overdue in the same tick produced two identical
+        "grace period gone" messages, which reads like the bot stuttering. And
+        two simultaneous asks are misleading: a single photo settles the newest
+        and sweeps the rest, so asking twice implies work that isn't required.
+        """
+        from .engine import Action
+        out, asks, misses = [], [], []
+        for a in actions:
+            if a.kind == "ask":
+                asks.append(a)
+            elif a.kind == "mark_missed":
+                misses.append(a)
+            else:
+                out.append(a)
+        if asks:
+            newest = asks[-1]
+            if len(asks) > 1:
+                newest = Action("ask", {**newest.payload, "also_due": len(asks) - 1})
+            out.append(newest)
+        if misses:
+            labels = list(dict.fromkeys(m.payload["label"] for m in misses))
+            out.append(Action("mark_missed", {
+                "labels": labels, "count": len(misses),
+                "checkpoint_id": misses[-1].payload["checkpoint_id"],
+            }))
+        return out
+
     async def _dispatch(self, act, now: datetime) -> None:
         p = act.payload
         if act.kind == "ask":
@@ -580,15 +619,23 @@ class LockstepBot:
             else:
                 body = (f"📸 <b>{due:%H:%M}</b> — {html.escape(p['label'])}\n\n"
                         f"Photo with the timestamp visible, within {self.cfg.grace_min} min.")
+                if p.get("also_due"):
+                    body += (f"\n\n({p['also_due']} earlier checkpoint came due too — "
+                             "one photo covers it.)")
             await self.send_user(body)
             self.ledger.append("checkpoint_asked", {"checkpoint": p["checkpoint_id"],
                                                     "blocker": bool(p.get("require_blocker"))})
 
         elif act.kind == "mark_missed":
+            labels = p.get("labels") or [p.get("label", "your planned task")]
+            what = ", ".join(html.escape(x) for x in labels)
+            n = p.get("count", 1)
+            prefix = f"⏰ Grace period gone ({n} checkpoints)" if n > 1 else "⏰ Grace period gone"
             await self.send_user(
-                f"⏰ Grace period gone for <b>{html.escape(p['label'])}</b>. "
+                f"{prefix} for <b>{what}</b>. "
                 "Escalation has started — it stops the moment a valid photo lands.")
-            self.ledger.append("checkpoint_overdue", {"checkpoint": p["checkpoint_id"]})
+            self.ledger.append("checkpoint_overdue",
+                               {"checkpoint": p["checkpoint_id"], "count": n})
 
         elif act.kind == "outage_amnesty":
             await self.send_user(

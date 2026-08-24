@@ -40,7 +40,7 @@ blocks = planner.parse("""16:00-16:40 commute to MNU library
 planner.validate_coverage(blocks, 16*60, 22*60)
 db.replace_blocks(DAY, [b.as_tuple() for b in blocks])
 db.run("UPDATE days SET plan_locked=1, plan_submitted_at=? WHERE date=?", (T(15,0).isoformat(), DAY.isoformat()))
-n = eng.build_checkpoints(DAY)
+n = eng.build_checkpoints(DAY)["made"]
 check("checkpoints for 16:00-22:00 @15min", n, 24)
 check("debt cleared once planned", eng.debt_seconds(DAY, T(16, 30)), 0)
 
@@ -171,5 +171,32 @@ for _ in range(20):                                    # 19:58 -> 20:03
     nags += len([a for a in eng4.tick(t) if a.kind == "plan_nag"])
     t += timedelta(seconds=30)
 check("one plan_nag per configured nag time", nags, 1)
+
+print("\n=== 11. a plan submitted mid-window cannot create instant debt ===")
+# Exactly the bug from the live run: plan sent at 18:56 for a window that
+# opened at 16:00 produced demands for 16:34 and 18:26 and two hours of debt.
+cfg6, db6, led6, eng6, _ = build()
+db6.set_lock(enabled=1, commitment_end="2099-01-01")
+db6.ensure_day(DAY)
+bl6 = planner.parse("16:00-19:00 work: linear algebra pset\n19:00-22:00 work: essay")
+db6.replace_blocks(DAY, [b.as_tuple() for b in bl6])
+db6.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+
+late = T(18, 56)
+built = eng6.build_checkpoints(DAY, late)
+check("past slots were voided", built["voided"] > 0, True)
+check("some slots remain live", built["live"] > 0, True)
+past_states = {c["state"] for c in eng6.checkpoints(DAY)
+               if datetime.fromisoformat(c["due_at"]) <= late}
+check("every past slot is excused, none scheduled", past_states, {"excused"})
+check("no instant debt", eng6.debt_seconds(DAY, late), 0)
+check("agent stays quiet", eng6.agent_state(late).active, False)
+
+acts6 = [a.kind for a in eng6.tick(T(18, 57))]
+check("no retroactive asks", "ask" in acts6, False)
+check("no retroactive misses", "mark_missed" in acts6, False)
+check("voided slots never count against the score", eng6.score(DAY, late)["missed"], 0)
+check("first live checkpoint is in the future",
+      datetime.fromisoformat(built["first"]) > late, True)
 
 sys.exit(report("ENGINE TESTS"))

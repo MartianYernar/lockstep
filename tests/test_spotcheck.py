@@ -38,7 +38,7 @@ def minutes_of(eng):
 
 print("\n=== every planned block gets watched ===")
 cfg, db, led, eng = make()
-n = eng.build_checkpoints(DAY)
+n = eng.build_checkpoints(DAY)["made"]
 pts = minutes_of(eng)
 blocks = {b["id"]: b["label"] for b in db.blocks(DAY)}
 covered = {p[1] for p in pts}
@@ -61,7 +61,7 @@ check("no two checks closer than 20 min", min(gaps) >= 20, True)
 print(f"       gaps: {gaps}  (min {min(gaps)}, max {max(gaps)})")
 
 print("\n=== rebuilding is idempotent (or every rebuild would pile up) ===")
-again = eng.build_checkpoints(DAY)
+again = eng.build_checkpoints(DAY)["made"]
 check("second build adds nothing", again, 0)
 check("count unchanged", len(minutes_of(eng)), len(pts))
 
@@ -81,7 +81,7 @@ print(f"       day 2: {d2}")
 print("\n=== density follows the setting ===")
 for avg, lo, hi in ((30, 9, 16), (45, 6, 12), (90, 3, 8)):
     _, _, _, e = make(avg=avg)
-    c = e.build_checkpoints(DAY)
+    c = e.build_checkpoints(DAY)["made"]
     check(f"avg={avg}min -> {lo}-{hi} checks/day", lo <= c <= hi, True)
     print(f"       avg {avg} min -> {c} checks")
 

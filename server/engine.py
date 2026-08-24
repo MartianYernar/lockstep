@@ -155,21 +155,38 @@ class Engine:
             last = minute
         return kept
 
-    def build_checkpoints(self, day: date) -> int:
-        """Materialise every checkpoint for a day. Idempotent."""
+    def build_checkpoints(self, day: date, now: datetime | None = None) -> dict:
+        """Materialise a day's checkpoints. Idempotent.
+
+        Anything already in the past at build time is born `excused`, never
+        `scheduled`. Submit a plan at 18:56 for a window that opened at 16:00 and
+        the old code would demand photographic proof of 16:34 -- a moment that no
+        longer exists -- and put you in two hours of debt for failing to produce
+        it. You cannot photograph the past. Those slots are void.
+        """
+        now = now or self.cfg.now()
         times = (self._fixed_times(day) if self.cfg.mode == "fixed"
                  else self._spot_check_times(day))
-        made = 0
+        made = voided = 0
         for minute, block_id in times:
             due = self.cfg.at(day, minute)
+            past = due <= now
             cur = self.db.conn.execute(
-                "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id) VALUES (?, ?, ?)",
-                (day.isoformat(), due.isoformat(), block_id),
+                "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id, state, settled_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (day.isoformat(), due.isoformat(), block_id,
+                 "excused" if past else "scheduled", now.isoformat() if past else None),
             )
-            made += cur.rowcount
+            if cur.rowcount:
+                made += 1
+                voided += 1 if past else 0
         self.db.conn.commit()
         self.db.run("UPDATE days SET checkpoints_built = 1 WHERE date = ?", (day.isoformat(),))
-        return made
+        upcoming = self.db.one(
+            "SELECT due_at FROM checkpoints WHERE date=? AND state='scheduled'"
+            " ORDER BY due_at LIMIT 1", (day.isoformat(),))
+        return {"made": made, "voided": voided, "live": made - voided,
+                "first": upcoming["due_at"] if upcoming else None}
 
     def checkpoints(self, day: date) -> list:
         return self.db.q(
@@ -310,7 +327,7 @@ class Engine:
 
             row = self.db.day(day)
             if not row["checkpoints_built"]:
-                self.build_checkpoints(day)
+                self.build_checkpoints(day, now)
 
             grace = timedelta(minutes=self.cfg.grace_min)
             for cp in self.checkpoints(day):
@@ -449,5 +466,5 @@ class Engine:
             "DELETE FROM checkpoints WHERE date=? AND state='scheduled' AND due_at > ?",
             (day.isoformat(), now.isoformat()),
         )
-        added = self.build_checkpoints(day)
-        return {"excused": excused, "added": added}
+        built = self.build_checkpoints(day, now)
+        return {"excused": excused, "added": built["live"]}
