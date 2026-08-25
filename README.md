@@ -94,6 +94,19 @@ what makes that expensive, not impossible.
 
 ---
 
+## Privacy
+
+Photos are stripped of metadata, downscaled, stored as thumbnails, and deleted
+after a week. Your father sees counts, never images.
+
+But: every photo goes to Google's vision API to be checked, and on the free tier
+Google may retain and human-review it. Downscaling does **not** hide a skyline —
+I tested that, and the model described "high-rise buildings" just as readily at
+512px as at 3000px. If you photograph yourself outdoors, frame tight. Full
+accounting in [docs/PRIVACY.md](docs/PRIVACY.md).
+
+---
+
 ## The honest part
 
 You have root on the server. You can `rm` the database. Any claim that this is

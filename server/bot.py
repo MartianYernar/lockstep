@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import planner
+from . import images, planner
 from .lock import LockError
 
 log = logging.getLogger("bot")
@@ -451,7 +451,16 @@ class LockstepBot:
 
         photo = update.message.photo[-1]
         tg_file = await photo.get_file()
-        blob = bytes(await tg_file.download_as_bytearray())
+        raw = bytes(await tg_file.download_as_bytearray())
+
+        priv = self.cfg.raw.get("privacy", {})
+        if priv.get("warn_on_gps", True) and images.has_gps(raw):
+            await update.message.reply_text(
+                "⚠️ That photo carried GPS coordinates. I stripped them before doing "
+                "anything with it, but turn location tagging off in your camera app — "
+                "every other app you send photos to will keep them.")
+        # Downscaled and metadata-stripped before it goes to Google or to disk.
+        blob, mime = images.prepare(raw, int(priv.get("max_dimension", 1024)))
 
         if pend.get("action") == "offset_proof":
             path = self._save_photo(blob, today, "offset")
@@ -481,7 +490,7 @@ class LockstepBot:
             and self.engine.is_first_of_block(today, cp["id"])
         )
         await update.message.chat.send_action("typing")
-        verdict = await self.validator.check(blob, label, category, now,
+        verdict = await self.validator.check(blob, label, category, now, mime=mime,
                                              require_blocker=require_blocker)
 
         if not verdict.ok:
@@ -512,12 +521,23 @@ class LockstepBot:
         await update.message.reply_text(
             f"✅ Counted. {sc['hit']}/{sc['due']} today.{note}", parse_mode=ParseMode.HTML)
 
-    def _save_photo(self, blob: bytes, day: date, tag: str) -> str:
+    def _save_photo(self, blob: bytes, day: date, tag: str) -> str | None:
+        """Keep what the policy allows and no more.
+
+        The default is a thumbnail: enough to remember what you sent, too small
+        to be worth much to anyone who gets hold of the server.
+        """
+        priv = self.cfg.raw.get("privacy", {})
+        mode = priv.get("store_photos", "thumbnail")
+        if mode == "none":
+            return None
+        data = (blob if mode == "full"
+                else images.thumbnail(blob, int(priv.get("thumbnail_dimension", 320))))
         folder = os.path.join(PHOTO_DIR, day.isoformat())
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, f"{tag}_{datetime.now():%H%M%S}.jpg")
         with open(path, "wb") as fh:
-            fh.write(blob)
+            fh.write(data)
         return path
 
     async def on_text(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -619,6 +639,12 @@ class LockstepBot:
             else:
                 body = (f"📸 <b>{due:%H:%M}</b> — {html.escape(p['label'])}\n\n"
                         f"Photo with the timestamp visible, within {self.cfg.grace_min} min.")
+                hint_cats = self.cfg.raw.get("privacy", {}).get(
+                    "framing_hint_categories", [])
+                if p.get("category") in hint_cats:
+                    body += ("\n\n🔒 Outdoors — frame it tight. Point at the equipment "
+                             "or yourself, not the skyline. Buildings in the background "
+                             "are enough to place you.")
                 if p.get("also_due"):
                     body += (f"\n\n({p['also_due']} earlier checkpoint came due too — "
                              "one photo covers it.)")
@@ -645,6 +671,18 @@ class LockstepBot:
                 f"🔌 System was offline ~{p['minutes']} min; "
                 f"{p['excused']} checkpoints voided. Not his doing.")
 
+        elif act.kind == "phone_silent":
+            await self.send_user(
+                f"📵 <b>Your phone hasn't checked in for {p['minutes']} min.</b>\n\n"
+                "The alarm agent is dead, so nothing on your phone will nag you right now. "
+                "Check MacroDroid is running and that battery optimisation is off for it.\n\n"
+                "Telegram checkpoints carry on regardless — this only affects the siren.")
+            if p.get("escalate"):
+                await self.send_guardian(
+                    f"📵 Ansar's phone agent has been silent for {p['minutes']} min "
+                    "during the enforcement window. Could be a flat battery or a crash; "
+                    "could also be switched off. Worth asking.")
+
         elif act.kind == "plan_missing":
             await self.send_user(
                 "⚠️ <b>The window is open and there's no plan for today.</b>\n\n"
@@ -656,6 +694,10 @@ class LockstepBot:
                 f"Due by {self.cfg.plan_due:%H:%M}. Send /plan.")
 
         elif act.kind == "daily_report":
+            keep = int(self.cfg.raw.get("privacy", {}).get("retain_days", 7))
+            gone = self.engine.purge_photos(keep)
+            if gone:
+                log.info("purged %d photos older than %d days", gone, keep)
             day = date.fromisoformat(p["date"])
             text = self._report_text(day)
             await self.send_user(text)

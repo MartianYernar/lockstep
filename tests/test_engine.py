@@ -16,8 +16,10 @@ def T(h, m): return datetime(2026, 8, 25, h, m, tzinfo=TZ)
 cfg, db, _led, eng, _lk = build()
 
 def tick(t):
-    """tick() as a live server sees it: 30 seconds since the last one."""
-    db.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat())
+    """tick() as a live server sees it: 30 seconds since the last one, and a
+    phone that is polling normally (otherwise the watchdog fires too)."""
+    db.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat(),
+                last_agent_poll=(t - timedelta(seconds=20)).isoformat())
     return eng.tick(t)
 
 db.set_lock(enabled=1, commitment_end="2026-11-25")
@@ -203,5 +205,40 @@ check("no retroactive misses", "mark_missed" in acts6, False)
 check("voided slots never count against the score", eng6.score(DAY, late)["missed"], 0)
 check("first live checkpoint is in the future",
       datetime.fromisoformat(built["first"]) > late, True)
+
+print("\n=== 12. a silent phone is not the same as a compliant one ===")
+cfg7, db7, led7, eng7, _ = build()
+db7.set_lock(enabled=1, commitment_end="2099-01-01")
+db7.ensure_day(DAY)
+bl7 = planner.parse("16:00-22:00 work: essay")
+db7.replace_blocks(DAY, [b.as_tuple() for b in bl7])
+db7.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng7.build_checkpoints(DAY, T(15, 59))
+
+def tick7(t, poll_ago_min=None):
+    db7.set_lock(last_tick_at=(t - timedelta(seconds=30)).isoformat())
+    if poll_ago_min is not None:
+        db7.set_lock(last_agent_poll=(t - timedelta(minutes=poll_ago_min)).isoformat())
+    return eng7.tick(t)
+
+kinds = [a.kind for a in tick7(T(16, 30), poll_ago_min=0.5)]
+check("healthy phone raises nothing", "phone_silent" in kinds, False)
+
+acts = tick7(T(16, 45), poll_ago_min=12)
+sil = [a for a in acts if a.kind == "phone_silent"]
+check("12 min of silence is noticed", len(sil), 1)
+check("reports how long", sil[0].payload["minutes"], 12)
+check("short silence does not escalate to the guardian", sil[0].payload["escalate"], False)
+
+acts = tick7(T(17, 30), poll_ago_min=75)
+sil = [a for a in acts if a.kind == "phone_silent"]
+check("long silence escalates", sil[0].payload["escalate"], True)
+
+# and it must not repeat every 30 seconds
+n = 0
+for i in range(20):
+    t = T(17, 31) + timedelta(seconds=30 * i)
+    n += len([a for a in tick7(t, poll_ago_min=80) if a.kind == "phone_silent"])
+check("throttled, not a flood", n <= 1, True)
 
 sys.exit(report("ENGINE TESTS"))

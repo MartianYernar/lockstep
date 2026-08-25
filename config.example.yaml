@@ -69,6 +69,19 @@ vision:
   require_blocker_for_work: false
   blocker_name: "Cold Turkey"
 
+privacy:
+  # Every photo is downscaled and stripped of metadata (GPS included) before it
+  # is sent anywhere or written to disk.
+  max_dimension: 1024          # verified: the timestamp still reads at 512px
+  store_photos: thumbnail      # full | thumbnail | none
+  thumbnail_dimension: 320
+  retain_days: 7               # 0 = keep forever
+  warn_on_gps: true            # tell you if your camera is tagging coordinates
+
+  # Remind you to frame tight on blocks that happen outdoors. Downscaling does
+  # NOT hide a skyline -- only framing does.
+  framing_hint_categories: ["sport", "commute", "relax"]
+
 api:
   host: "0.0.0.0"
   port: 8765

@@ -38,7 +38,11 @@ def build_app(cfg, engine, ledger) -> web.Application:
     async def state(request: web.Request) -> web.Response:
         if not _authorised(request, token):
             return web.json_response({"error": "unauthorised"}, status=401)
-        st = engine.agent_state(cfg.now())
+        # Every poll is a heartbeat. A phone that stops asking is a phone that
+        # can no longer nag you, which looks exactly like compliance.
+        cfg_now = cfg.now()
+        engine.db.set_lock(last_agent_poll=cfg_now.isoformat())
+        st = engine.agent_state(cfg_now)
         return web.json_response(st.as_dict())
 
     async def ack(request: web.Request) -> web.Response:

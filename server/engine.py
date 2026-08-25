@@ -365,6 +365,16 @@ class Engine:
                         "label": cp["label"] or "your planned task",
                     }))
 
+        # --- is the phone still alive? ---
+        if start <= minute < end:
+            silence = self._phone_silence(now)
+            if silence is not None:
+                bucket = int(silence // 15)          # renag every 15 min at most
+                if self.db.claim(f"phone_silent:{day.isoformat()}:{bucket}"):
+                    actions.append(Action("phone_silent", {
+                        "minutes": int(silence), "escalate": silence >= 60,
+                    }))
+
         # --- once the window shuts: close the books and report ---
         if minute >= end:
             self.db.run(
@@ -391,6 +401,42 @@ class Engine:
                     actions.append(Action("plan_nag", {"date": tomorrow.isoformat()}))
 
         return actions
+
+    def _phone_silence(self, now: datetime) -> float | None:
+        """Minutes since the phone last polled, or None if it's fine.
+
+        This is the failure mode that matters most: the phone agent dying
+        quietly. No siren goes off, nothing looks wrong, and you find out weeks
+        later that the system stopped watching. Silence has to be loud.
+        """
+        grace = max(5, int(self.cfg.esc.get("phone_poll_sec", 60)) * 5 / 60)
+        last = self.db.lock()["last_agent_poll"]
+        if not last:
+            # Never polled at all. Only complain once the window is properly open,
+            # so a fresh install isn't greeted with an alarm.
+            start, _ = self.window(now.date())
+            open_for = (now - self.cfg.at(now.date(), start)).total_seconds() / 60
+            return open_for if open_for > grace else None
+        gap = (now - datetime.fromisoformat(last)).total_seconds() / 60
+        return gap if gap > grace else None
+
+    def purge_photos(self, days: int) -> int:
+        """Delete stored photos older than `days`. Returns how many went."""
+        import os
+        import shutil
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "photos")
+        if not os.path.isdir(root) or days <= 0:
+            return 0
+        cutoff = (self.cfg.today() - timedelta(days=days)).isoformat()
+        gone = 0
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            if os.path.isdir(path) and name < cutoff:
+                gone += len(os.listdir(path))
+                shutil.rmtree(path, ignore_errors=True)
+        if gone:
+            self.ledger.append("photos_purged", {"files": gone, "older_than": cutoff})
+        return gone
 
     def _outage_amnesty(self, day: date, now: datetime) -> dict | None:
         last_raw = self.db.lock()["last_tick_at"]

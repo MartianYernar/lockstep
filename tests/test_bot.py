@@ -141,10 +141,14 @@ check("re-enabling needs no password", lk.enabled, True)
 print("\n=== /offset: one per day, reason then photo ===")
 cfg, db, led, eng, lk, bot, val = make()
 today = cfg.today()
+# Pin the clock inside the window — this test used to depend on what time of
+# day it happened to be run, and quietly took a different branch in the morning.
+cfg.now = lambda: datetime.combine(today, datetime.min.time(),
+                                   tzinfo=cfg.tz).replace(hour=18, minute=0)
 db.ensure_day(today)
 db.replace_blocks(today, [(16*60, 22*60, "work: essay", "work")])
 db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
-eng.build_checkpoints(today)
+eng.build_checkpoints(today, cfg.now())
 
 u = FakeUpdate("/offset x")
 run(bot.cmd_offset(u, None))
@@ -152,13 +156,13 @@ check("a one-word reason is refused", "actually happened" in u.message.last, Tru
 
 u = FakeUpdate("/offset stayed back for a department meeting after class")
 run(bot.cmd_offset(u, None))
-in_window = eng.in_window(cfg.now())
-if in_window:
-    check("asks for photo proof", "send one photo" in u.message.last.lower(), True)
-    check("pending proof state", bot.pending[USER]["action"], "offset_proof")
-else:
-    check("outside the window it declines", "isn't open" in u.message.last, True)
-    print("       (running outside 16:00-22:00, so the offset path is inert — correct)")
+check("asks for photo proof", "send one photo" in u.message.last.lower(), True)
+check("pending proof state", bot.pending[USER]["action"], "offset_proof")
+
+u = FakeUpdate("/offset another reason entirely, second try today")
+db.run("UPDATE days SET offsets_used = 1 WHERE date = ?", (today.isoformat(),))
+run(bot.cmd_offset(u, None))
+check("only one offset a day", "already used" in u.message.last, True)
 
 print("\n=== guardian-only commands reject the user ===")
 cfg, db, led, eng, lk, bot, val = make()
