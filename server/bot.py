@@ -140,6 +140,7 @@ class LockstepBot:
              f"(until {row['commitment_end']})") if row["commitment_end"]
             else "Commitment: none — trial mode, you can stop any time",
             f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'}",
+            f"Phone agent: {self._phone_status(now)}",
         ]
         if self.engine.has_plan(today):
             sc = self.engine.score(today, now)
@@ -147,6 +148,17 @@ class LockstepBot:
         else:
             lines.append("Today: <b>no plan submitted</b>")
         await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    def _phone_status(self, now: datetime) -> str:
+        last = self.db.lock()["last_agent_poll"]
+        if not last:
+            return "⚠️ never seen — not set up yet"
+        gap = (now - datetime.fromisoformat(last)).total_seconds() / 60
+        if gap < 5:
+            return "🟢 alive"
+        if gap < 60:
+            return f"🟡 quiet for {int(gap)} min"
+        return f"🔴 silent for {int(gap // 60)}h — the siren is dead"
 
     async def cmd_plan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):

@@ -412,11 +412,11 @@ class Engine:
         grace = max(5, int(self.cfg.esc.get("phone_poll_sec", 60)) * 5 / 60)
         last = self.db.lock()["last_agent_poll"]
         if not last:
-            # Never polled at all. Only complain once the window is properly open,
-            # so a fresh install isn't greeted with an alarm.
-            start, _ = self.window(now.date())
-            open_for = (now - self.cfg.at(now.date(), start)).total_seconds() / 60
-            return open_for if open_for > grace else None
+            # Never polled at all means the agent was never installed, which is
+            # a setup step, not a fault. Nagging about a component that has never
+            # existed just trains you to ignore the channel. /status reports it
+            # instead, quietly, where you'll look for it.
+            return None
         gap = (now - datetime.fromisoformat(last)).total_seconds() / 60
         return gap if gap > grace else None
 

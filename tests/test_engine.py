@@ -224,6 +224,17 @@ def tick7(t, poll_ago_min=None):
 kinds = [a.kind for a in tick7(T(16, 30), poll_ago_min=0.5)]
 check("healthy phone raises nothing", "phone_silent" in kinds, False)
 
+# A phone that has NEVER polled is an unfinished setup, not a fault.
+cfg8, db8, led8, eng8, _ = build()
+db8.set_lock(enabled=1, commitment_end="2099-01-01", last_agent_poll=None)
+db8.ensure_day(DAY)
+db8.replace_blocks(DAY, [b.as_tuple() for b in planner.parse("16:00-22:00 work: essay")])
+db8.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng8.build_checkpoints(DAY, T(15, 59))
+db8.set_lock(last_tick_at=T(17, 59, ).isoformat())
+check("never-installed agent is not nagged about",
+      "phone_silent" in [a.kind for a in eng8.tick(T(18, 0))], False)
+
 acts = tick7(T(16, 45), poll_ago_min=12)
 sil = [a for a in acts if a.kind == "phone_silent"]
 check("12 min of silence is noticed", len(sil), 1)
