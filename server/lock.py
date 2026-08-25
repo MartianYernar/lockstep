@@ -39,6 +39,20 @@ class Lock:
         self.ledger = ledger
         self._setup_token: str | None = None
 
+    def guardian_id(self) -> int:
+        """Whoever is registered, falling back to the config file.
+
+        Runtime registration exists because the config route needs you to know
+        a Telegram numeric id before anyone has messaged the bot, which is a
+        chicken-and-egg problem people get stuck on.
+        """
+        row = self.db.lock()
+        return int(row["guardian_chat_id"] or self.cfg.guardian_chat_id or 0)
+
+    def register_guardian(self, chat_id: int) -> None:
+        self.db.set_lock(guardian_chat_id=int(chat_id))
+        self.ledger.append("guardian_registered", {"chat_id": int(chat_id)})
+
     # -- guardian enrolment ----------------------------------------------------
     @property
     def is_configured(self) -> bool:
@@ -51,7 +65,7 @@ class Lock:
     def complete_setup(self, token: str, password: str, from_chat_id: int) -> None:
         if self.is_configured:
             raise LockError("A guardian password is already set. Use /guardian_change.")
-        if from_chat_id != self.cfg.guardian_chat_id:
+        if from_chat_id != self.guardian_id():
             raise LockError("Only the guardian's own Telegram account can set the password.")
         if not self._setup_token or not secrets.compare_digest(token.upper(), self._setup_token):
             raise LockError("That setup code is wrong or expired. Restart the bot for a new one.")
@@ -62,7 +76,7 @@ class Lock:
         self.ledger.append("guardian_enrolled", {"chat_id": from_chat_id})
 
     def change_password(self, old: str, new: str, from_chat_id: int) -> None:
-        if from_chat_id != self.cfg.guardian_chat_id:
+        if from_chat_id != self.guardian_id():
             raise LockError("Only the guardian can change the password.")
         if not self._matches(old):
             raise LockError("Current password is wrong.")

@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==21.9
-google-genai==0.8.0
+google-genai==1.47.0
 PyYAML==6.0.2
 aiohttp==3.11.11
 bcrypt==4.2.1

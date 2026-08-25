@@ -11,8 +11,12 @@ telegram:
   guardian_chat_id: 0      # your father's numeric Telegram id
 
 gemini:
-  api_key: "PUT_GEMINI_KEY_HERE"
-  model: "gemini-2.5-flash"
+  api_key: "PUT_GEMINI_KEY_HERE"          # aistudio.google.com/apikey
+  # Measured on this exact workload: flash-lite is ~5x cheaper than full flash
+  # and got every test verdict right. Reading a clock and recognising a gym is
+  # perception, not reasoning, so the bigger model buys nothing here.
+  model: "gemini-3.1-flash-lite"
+  thinking_budget: 0                      # null to re-enable thinking
 
 schedule:
   enforce_start: "16:00"          # proof window opens

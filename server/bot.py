@@ -40,6 +40,7 @@ class LockstepBot:
         self.lock = lock
         self.validator = validator
         self.pending: dict[int, dict] = {}      # chat_id -> {"action": ..., ...}
+        self.seen_strangers: dict[int, str] = {}
         self.last_level: int = 0
         self.app: Application | None = None
 
@@ -50,16 +51,17 @@ class LockstepBot:
         return update.effective_chat.id == self.cfg.user_chat_id
 
     def _is_guardian(self, update: Update) -> bool:
-        return update.effective_chat.id == self.cfg.guardian_chat_id
+        return update.effective_chat.id == self.lock.guardian_id()
 
     async def send_user(self, text: str, **kw) -> None:
         await self.app.bot.send_message(self.cfg.user_chat_id, text,
                                         parse_mode=ParseMode.HTML, **kw)
 
     async def send_guardian(self, text: str, **kw) -> None:
-        if self.cfg.guardian_chat_id:
+        gid = self.lock.guardian_id()
+        if gid:
             try:
-                await self.app.bot.send_message(self.cfg.guardian_chat_id, text,
+                await self.app.bot.send_message(gid, text,
                                                 parse_mode=ParseMode.HTML, **kw)
             except Exception as exc:                          # noqa: BLE001
                 log.error("could not reach guardian: %s", exc)
@@ -366,6 +368,45 @@ class LockstepBot:
         await update.message.reply_text("🟢 Back on.")
         await self.send_guardian("🟢 Ansar switched the system back on.")
 
+    async def cmd_setguardian(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        parts = update.message.text.split()
+        if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            seen = self.seen_strangers
+            if not seen:
+                await update.message.reply_text(
+                    "Nobody unrecognised has messaged the bot yet. Ask your father to "
+                    "send it any message, then run /setguardian again.")
+                return
+            lines = "\n".join(f"  <code>/setguardian {cid}</code> — {html.escape(name)}"
+                               for cid, name in seen.items())
+            await update.message.reply_text(
+                f"People who've messaged the bot and aren't you:\n{lines}",
+                parse_mode=ParseMode.HTML)
+            return
+        gid = int(parts[1])
+        if gid == self.cfg.user_chat_id:
+            await update.message.reply_text("That's you. The guardian has to be someone else.")
+            return
+        if self.lock.is_configured:
+            await update.message.reply_text(
+                "A guardian password is already set — the guardian can't be swapped "
+                "without it. That's the point of it.")
+            return
+        self.lock.register_guardian(gid)
+        await update.message.reply_text(f"✅ Guardian registered: <code>{gid}</code>",
+                                        parse_mode=ParseMode.HTML)
+        token = self.lock.new_setup_token()
+        await self.send_guardian(
+            "You've been set as the guardian for Ansar's accountability system.\n\n"
+            "He cannot switch it off without a password only you know. To set it, "
+            f"send me:\n\n<code>/guardian {token} your-chosen-password</code>\n\n"
+            "Pick something he won't guess and keep it in your notes app. "
+            "I'll delete your message as soon as I've read it.")
+        await update.message.reply_text(
+            "I've messaged him the setup code directly — you never see it.")
+
     async def cmd_cancel(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self.pending.pop(update.effective_chat.id, None):
             await update.message.reply_text("Dropped.")
@@ -575,6 +616,23 @@ class LockstepBot:
 
         if self._is_user(update):
             await update.message.reply_text("Send a photo, or /help.")
+            return
+
+        # A stranger. Almost always the guardian saying hello before anyone has
+        # told the bot who they are — previously this was silently discarded,
+        # which is a miserable way to lose the one message that matters.
+        if not self._is_guardian(update):
+            chat = update.effective_chat
+            name = " ".join(filter(None, [getattr(chat, "first_name", ""),
+                                          getattr(chat, "last_name", "")])) or "unknown"
+            self.seen_strangers[chat.id] = name
+            await update.message.reply_text(
+                "You're not registered with this bot yet. Ansar has been told you "
+                "messaged — he'll add you.")
+            await self.send_user(
+                f"👤 <b>{html.escape(name)}</b> just messaged the bot "
+                f"(<code>{chat.id}</code>) and isn't registered.\n\n"
+                f"If that's your father:\n<code>/setguardian {chat.id}</code>")
 
     # ======================================================================
     # the tick
@@ -755,6 +813,7 @@ class LockstepBot:
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("guardian", self.cmd_guardian),
+            ("setguardian", self.cmd_setguardian),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

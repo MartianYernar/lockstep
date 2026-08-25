@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .venv/
 photos/
+tests/fixtures_img/

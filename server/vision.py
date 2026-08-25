@@ -154,6 +154,17 @@ class Validator:
     async def _ask(self, image_bytes: bytes, mime: str, prompt: str) -> dict:
         from google.genai import types
         client = self._get_client()
+
+        # Thinking tokens are billed at the output rate and dominate the cost of
+        # a job this small. Measured: with thinking on, ~890 output tokens per
+        # check; with it off, ~160 -- and the verdicts came out identical, because
+        # "is there a clock and does this look like a gym" is perception, not
+        # reasoning. Set thinking_budget to null in config to re-enable it.
+        extra = {}
+        budget = self.cfg.raw["gemini"].get("thinking_budget", 0)
+        if budget is not None:
+            extra["thinking_config"] = types.ThinkingConfig(thinking_budget=int(budget))
+
         resp = await client.aio.models.generate_content(
             model=self.cfg.raw["gemini"]["model"],
             contents=[
@@ -164,6 +175,7 @@ class Validator:
                 temperature=0.0,
                 response_mime_type="application/json",
                 response_schema=RESPONSE_SCHEMA,
+                **extra,
             ),
         )
         return json.loads(resp.text)

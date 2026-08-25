@@ -222,4 +222,43 @@ check("two asks become one", len(asks), 1)
 check("keeps the newest", asks[0].payload["checkpoint_id"], 2)
 check("mentions the other", asks[0].payload["also_due"], 1)
 
+print("\n=== a stranger messaging the bot is surfaced, not swallowed ===")
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = 0        # nobody registered yet
+DAD = 99
+u = FakeUpdate("hello?", chat_id=DAD)
+u.effective_chat.first_name = "Yerlan"; u.effective_chat.last_name = ""
+run(bot.on_text(u, None))
+check("stranger gets an answer", "not registered" in u.message.last, True)
+check("stranger is remembered", DAD in bot.seen_strangers, True)
+sent = bot.app.bot.to(USER)
+check("user is told, with the chat id", any(str(DAD) in t for t in sent), True)
+check("user is told the exact command", any("/setguardian" in t for t in sent), True)
+
+print("\n=== /setguardian registers them and sends the setup code ===")
+u2 = FakeUpdate(f"/setguardian {DAD}")
+run(bot.cmd_setguardian(u2, None))
+check("registered", lk.guardian_id(), DAD)
+check("confirmed to user", "Guardian registered" in u2.message.last, True)
+dad_msgs = bot.app.bot.to(DAD)
+check("setup code went to him, not to you", any("/guardian " in t for t in dad_msgs), True)
+check("the code never appears in your chat",
+      any("/guardian " in t for t in bot.app.bot.to(USER)), False)
+
+print("\n=== you cannot make yourself the guardian ===")
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = 0
+u3 = FakeUpdate(f"/setguardian {USER}")
+run(bot.cmd_setguardian(u3, None))
+check("refused", "has to be someone else" in u3.message.last, True)
+check("nobody registered", lk.guardian_id(), 0)
+
+print("\n=== once a password is set, the guardian can't be swapped ===")
+lk.register_guardian(DAD)
+lk._setup_token = "Z"; lk.complete_setup("Z", "fatherpassword", DAD)
+u4 = FakeUpdate("/setguardian 12345")
+run(bot.cmd_setguardian(u4, None))
+check("swap refused", "already set" in u4.message.last, True)
+check("still the original guardian", lk.guardian_id(), DAD)
+
 sys.exit(report("BOT TESTS"))

@@ -37,8 +37,14 @@ CASES = [
 
 
 async def main():
-    if not os.path.exists(IMG):
-        print("Run tests/make_test_images.py first."); return 1
+    # Regenerate every run. The whole point of these fixtures is a timestamp
+    # that reads as *now*; committed images go stale within the hour and the
+    # freshness check (correctly) rejects everything.
+    import subprocess
+    subprocess.run([sys.executable,
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "make_test_images.py")],
+                   check=True, capture_output=True)
     cfg = Config.load()
     v = Validator(cfg)
     now = cfg.now()
