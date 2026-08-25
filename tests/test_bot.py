@@ -239,7 +239,7 @@ print("\n=== /setguardian registers them and sends the setup code ===")
 u2 = FakeUpdate(f"/setguardian {DAD}")
 run(bot.cmd_setguardian(u2, None))
 check("registered", lk.guardian_id(), DAD)
-check("confirmed to user", "Guardian registered" in u2.message.last, True)
+check("confirmed to user", any("Guardian registered" in r for r in u2.message.replies), True)
 dad_msgs = bot.app.bot.to(DAD)
 check("setup code went to him, not to you", any("/guardian " in t for t in dad_msgs), True)
 check("the code never appears in your chat",
