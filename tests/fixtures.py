@@ -1,5 +1,8 @@
 """Shared test fixture: a config that doesn't need a real config.yaml."""
 import os, sys, tempfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,8 +34,18 @@ def check(name, got, want):
     return ok
 
 
-def build(raw=None):
-    """Fresh config + db + ledger + engine + lock on a throwaway directory."""
+# Every test runs at this instant unless it says otherwise. Tests that read the
+# real clock pass or fail depending on what time of day the suite is run, which
+# has now bitten this project four separate times.
+PINNED = datetime(2026, 8, 25, 18, 0, tzinfo=ZoneInfo("Asia/Almaty"))
+
+
+def build(raw=None, now=None):
+    """Fresh config + db + ledger + engine + lock on a throwaway directory.
+
+    The returned Config has its clock pinned. Override with `now=`, or reassign
+    cfg.now in the test, but never leave it reading the wall clock.
+    """
     from server.config import Config
     from server.db import Database
     from server.ledger import Ledger
@@ -44,6 +57,8 @@ def build(raw=None):
     with open(cpath, "w") as fh:
         yaml.safe_dump(raw or RAW, fh)
     cfg = Config.load(cpath)
+    fixed = now or PINNED
+    cfg.now = lambda: fixed
     db = Database(os.path.join(tmp, "t.db"))
     led = Ledger(db)
     return cfg, db, led, Engine(cfg, db, led), Lock(cfg, db, led)

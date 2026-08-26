@@ -144,10 +144,6 @@ check("re-enabling needs no password", lk.enabled, True)
 print("\n=== /offset: one per day, reason then photo ===")
 cfg, db, led, eng, lk, bot, val = make()
 today = cfg.today()
-# Pin the clock inside the window — this test used to depend on what time of
-# day it happened to be run, and quietly took a different branch in the morning.
-cfg.now = lambda: datetime.combine(today, datetime.min.time(),
-                                   tzinfo=cfg.tz).replace(hour=18, minute=0)
 db.ensure_day(today)
 db.replace_blocks(today, [(16*60, 22*60, "work: essay", "work")])
 db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
