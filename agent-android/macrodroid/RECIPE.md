@@ -1,86 +1,103 @@
-# Phone agent — MacroDroid route (recommended)
+# Phone agent — MacroDroid
 
-More reliable than Termux, because MacroDroid is a normal foreground app that
-Android's battery manager already understands. About ten minutes of tapping.
+Install **MacroDroid** by **ArloSoft** (Jamie Arlott). The free tier allows five
+macros; this needs one.
 
-Install **MacroDroid** by **ArloSoft** (Jamie Arlott) from the Play Store — yes,
-that's the right one, it's the only MacroDroid worth having. The free tier caps
-you at five macros; this needs one.
+> **How to follow this:** don't hunt through the menu tree. When you tap **+** to
+> add a trigger or action, there's a **search box at the top** — type the name in
+> bold below and pick it. Menu categories move between versions; names don't.
 
 ---
 
-## The macro: "Lockstep"
+## Create the macro
+
+MacroDroid → **Macros** → **+** → name it `Lockstep`.
 
 ### Trigger
-- **Device Events → Regular Interval** — every **1 minute**
-  - Tick *"Use alarm for triggering"* so Doze cannot stretch the interval.
 
-### Actions, in order
+Tap **+** under Triggers, search **Regular Interval** *(it lives under Date/Time)*.
 
-**1. HTTP Request**
-- Applications → HTTP Request
+- Interval: **1 minute**
+- Tick **Use alarm for triggering** — without this Android's Doze will stretch
+  your one-minute interval into fifteen while you sleep, and the siren arrives
+  far too late to matter.
+
+### Actions
+
+Add these in order. Tap **+** under Actions and search each name.
+
+**1. Search: HTTP Request**
 - Method: `GET`
-- URL: `http://YOUR_VPS_IP:8765/agent/state?token=YOUR_API_TOKEN`
-- Under *Response*: **Save response to variable** → create a string variable
-  called `resp`
-- Block next action until complete: **yes**
+- URL: `http://YOUR_SERVER:8765/agent/state?token=YOUR_API_TOKEN`
+- Turn on **Save response to variable** → create a **string** variable named `resp`
+- Turn on **Block next action until complete** — otherwise the following actions
+  read an empty variable and the macro does nothing at all, silently
 
-**2. Set Variable — `alarm_on`** (boolean)
-- Value type: **Expression**
-- Expression: `getJsonPath(resp, "$.phone_alarm") == "true"`
+**2–5. Search: Set Variable** (four times)
 
-**3. Set Variable — `minutes`** (integer)
-- Expression: `getJsonPath(resp, "$.debt_minutes")`
+Each one: create the variable, set **Value type: Expression**, paste the expression.
 
-**4. Set Variable — `headline`** (string)
-- Expression: `getJsonPath(resp, "$.headline")`
+| Variable | Type | Expression |
+|---|---|---|
+| `alarm_on` | Boolean | `getJsonPath(resp, "$.phone_alarm") = "true"` |
+| `minutes` | Integer | `getJsonPath(resp, "$.debt_minutes")` |
+| `volpct` | Integer | `getJsonPath(resp, "$.alarm_volume_pct")` |
+| `repeats` | Integer | `getJsonPath(resp, "$.alarm_repeats")` |
 
-**4b. Set Variable — `volpct`** (integer)
-- Expression: `getJsonPath(resp, "$.alarm_volume_pct")`
-- The server decides how loud, so you can change it in `config.yaml` later
-  without touching your phone.
-
-**4c. Set Variable — `repeats`** (integer)
-- Expression: `getJsonPath(resp, "$.alarm_repeats")`
-- How many times to sound off this minute. Grows the further behind you are —
-  the *volume* never changes.
-
-**5. IF `alarm_on` = true**  *(Logic → If/Else)*
+**6. Search: If** *(condition: `alarm_on` = true)*
 
 Inside the IF:
 
-- **Volume → Set Volume**
-  - Stream: **Alarm** → set the percentage from the variable `volpct` (55% by default)
-  - *This is the whole trick. The alarm stream ignores silent mode and Do Not
-    Disturb, and has its own slider, so your ringtone, media and calls all keep
-    working exactly as normal. It is set to just over half — loud enough that
-    you cannot work through it, not so loud it hurts.*
-- **Logic → Loop (Repeat)** → repeat `repeats` times, containing:
-  - **Media → Play Sound** — a genuinely irritating tone, Stream: **Alarm**
-  - **Device Actions → Vibrate** → pattern: *Long*
-  - **Logic → Wait Before Next Action** → 2 seconds
-  - *Escalation is repetition, not volume. At 20 minutes behind it fires twice
-    a minute, at 40 three times, capped at four. It never gets louder than the
-    percentage you set.*
-- **Notifications → Display Notification**
+- **Set Volume** → Stream: **Alarm** → use the variable `volpct`
+
+  *This is the whole trick. Android's alarm stream ignores silent mode and Do
+  Not Disturb and has its own slider — so this is very hard to mute while your
+  ringtone, media and calls all behave completely normally. At 55% it's loud
+  enough that you can't work through it and not loud enough to hurt.*
+
+- **Loop** (search: **Loop**) → repeat `repeats` times, containing:
+  - **Play Sound** — something genuinely irritating, Stream: **Alarm**
+  - **Vibrate** → pattern: *Long*
+  - **Wait Before Next Action** → 2 seconds
+
+  *Escalation is repetition, not volume: twice a minute at 20 minutes behind,
+  three times at 40, four at an hour. It never gets louder than you set.*
+
+- **Display Notification**
   - Title: `Lockstep — [lv=minutes] min behind`
   - Text: `[lv=headline]`
-  - Priority: **Max**, Ongoing: **yes**
+  - Priority **Max**, **Ongoing** on
 
-**6. ELSE**
+**7. Else**
 
-- **Volume → Set Volume** → Stream: **Alarm** → back to your normal level (7 or so)
-- **Notifications → Clear Notification** → the one above
+- **Set Volume** → Stream: **Alarm** → back to your normal level (7 or so)
+- **Clear Notification** → the one above
 
 ---
 
-## Battery settings
+## Battery settings — do not skip
 
-Settings → Apps → MacroDroid → Battery → **Unrestricted**. On Xiaomi also
-enable **Autostart**. Without this, Android will quietly stop the macro after a
-few hours and you will think the system is broken when it is just asleep.
+`Settings → Apps → MacroDroid → Battery → Unrestricted`. On Honor also check
+`Settings → Battery → App launch` and set MacroDroid to **Manage manually** with
+auto-launch and run-in-background both on.
 
-## Check it
+Without this Android kills the macro after a few hours and you'll think the
+system is broken when it's just asleep. The server will notice and tell you —
+but it's better not to need telling.
 
-MacroDroid → the macro → **⋮ → Test Actions**. With no debt outstanding you
+## Check it works
+
+MacroDroid → the macro → **⋮ → Test Actions**. With nothing outstanding you
 should get the ELSE branch and silence.
+
+Then do **Stage 2** of [the test plan](../../docs/TESTING.md): put the phone on
+silent, ignore a checkpoint for six minutes, and confirm it still sirens. If it
+doesn't, the Play Sound action is on the wrong stream — that single setting is
+the difference between a real system and a suggestion.
+
+## Server address
+
+While the bot runs on a laptop, `YOUR_SERVER` is that laptop's **local IP**
+(`ipconfig getifaddr en0` on a Mac) and the phone must be on the same wifi. Once
+it's on the VPS it becomes the public IP and works from anywhere — which is a
+large part of why the VPS matters.
