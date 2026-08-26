@@ -29,33 +29,34 @@ Add these in order. Tap **+** under Actions and search each name.
 **1. Search: HTTP Request**
 - Method: `GET`
 - URL: `http://YOUR_SERVER:8765/agent/state?token=YOUR_API_TOKEN`
-- Turn on **Save response to variable** → create a **string** variable named `resp`
-- Turn on **Block next action until complete** — otherwise the following actions
-  read an empty variable and the macro does nothing at all, silently
+- Turn on **Save response to string variable** → create a **String** variable
+  named `resp`
+- Turn on **Block next action until complete** — otherwise the next action reads
+  an empty variable and the macro does nothing at all, silently, with no error
 
-**2–5. Search: Set Variable** (four times)
+  > It must be a **String**, not a Dictionary. HTTP Request only ever writes
+  > text; the parsing is a separate step.
 
-Each one: create the variable, set **Value type: Expression**, paste the expression.
+**2. Search: JSON Parse** *(under "MacroDroid Specific")*
+- Input: the string variable `resp`
+- Output: create a **Dictionary** variable named `data`
 
-| Variable | Type | Expression |
-|---|---|---|
-| `alarm_on` | Boolean | `getJsonPath(resp, "$.phone_alarm") = "true"` |
-| `minutes` | Integer | `getJsonPath(resp, "$.debt_minutes")` |
-| `volpct` | Integer | `getJsonPath(resp, "$.alarm_volume_pct")` |
-| `repeats` | Integer | `getJsonPath(resp, "$.alarm_repeats")` |
+  > This turns the text into fields you can read directly. After running the
+  > macro once you can open Local Variables and see `data` expanded, which is
+  > the easiest way to confirm it's working.
 
-**6. Search: If** *(condition: `alarm_on` = true)*
+**3. Search: If** — condition: `data[phone_alarm]` **is true**
 
 Inside the IF:
 
-- **Set Volume** → Stream: **Alarm** → use the variable `volpct`
+- **Set Volume** → Stream: **Alarm** → value `data[alarm_volume_pct]` (percent)
 
   *This is the whole trick. Android's alarm stream ignores silent mode and Do
   Not Disturb and has its own slider — so this is very hard to mute while your
   ringtone, media and calls all behave completely normally. At 55% it's loud
   enough that you can't work through it and not loud enough to hurt.*
 
-- **Loop** (search: **Loop**) → repeat `repeats` times, containing:
+- **Loop** → repeat `data[alarm_repeats]` times, containing:
   - **Play Sound** — something genuinely irritating, Stream: **Alarm**
   - **Vibrate** → pattern: *Long*
   - **Wait Before Next Action** → 2 seconds
@@ -64,11 +65,11 @@ Inside the IF:
   three times at 40, four at an hour. It never gets louder than you set.*
 
 - **Display Notification**
-  - Title: `Lockstep — [lv=minutes] min behind`
-  - Text: `[lv=headline]`
+  - Title: `Lockstep — {v=data[debt_minutes]} min behind`
+  - Text: `{v=data[headline]}`
   - Priority **Max**, **Ongoing** on
 
-**7. Else**
+**4. Else**
 
 - **Set Volume** → Stream: **Alarm** → back to your normal level (7 or so)
 - **Clear Notification** → the one above
