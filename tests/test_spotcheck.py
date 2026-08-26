@@ -28,6 +28,9 @@ def make(**over):
     return cfg, db, led, eng
 
 
+BEFORE = datetime(2026, 8, 25, 15, 59, tzinfo=TZ)   # before the window opens
+
+
 def minutes_of(eng):
     out = []
     for c in eng.checkpoints(DAY):
@@ -38,7 +41,7 @@ def minutes_of(eng):
 
 print("\n=== every planned block gets watched ===")
 cfg, db, led, eng = make()
-n = eng.build_checkpoints(DAY)["made"]
+n = eng.build_checkpoints(DAY, BEFORE)["made"]
 pts = minutes_of(eng)
 blocks = {b["id"]: b["label"] for b in db.blocks(DAY)}
 covered = {p[1] for p in pts}
@@ -61,7 +64,7 @@ check("no two checks closer than 20 min", min(gaps) >= 20, True)
 print(f"       gaps: {gaps}  (min {min(gaps)}, max {max(gaps)})")
 
 print("\n=== rebuilding is idempotent (or every rebuild would pile up) ===")
-again = eng.build_checkpoints(DAY)["made"]
+again = eng.build_checkpoints(DAY, BEFORE)["made"]
 check("second build adds nothing", again, 0)
 check("count unchanged", len(minutes_of(eng)), len(pts))
 
@@ -71,7 +74,7 @@ print("\n=== but the times are genuinely unpredictable ===")
 cfg2, db2, led2, eng2 = make()
 db2.run("UPDATE blocks SET date=?", ((DAY + timedelta(days=1)).isoformat(),))
 db2.ensure_day(DAY + timedelta(days=1))
-eng2.build_checkpoints(DAY + timedelta(days=1))
+eng2.build_checkpoints(DAY + timedelta(days=1), BEFORE)
 d2 = [c["due_at"][11:16] for c in eng2.checkpoints(DAY + timedelta(days=1))]
 d1 = [f"{m//60:02d}:{m%60:02d}" for m, _, _ in pts]
 check("a different day draws different times", d1 == d2, False)
@@ -81,7 +84,7 @@ print(f"       day 2: {d2}")
 print("\n=== density follows the setting ===")
 for avg, lo, hi in ((30, 9, 16), (45, 6, 12), (90, 3, 8)):
     _, _, _, e = make(avg=avg)
-    c = e.build_checkpoints(DAY)["made"]
+    c = e.build_checkpoints(DAY, BEFORE)["made"]
     check(f"avg={avg}min -> {lo}-{hi} checks/day", lo <= c <= hi, True)
     print(f"       avg {avg} min -> {c} checks")
 
@@ -95,7 +98,7 @@ for b in short:
 
 print("\n=== offset rebuilds cleanly (no orphans at the old times) ===")
 cfg5, db5, led5, eng5 = make()
-eng5.build_checkpoints(DAY)
+eng5.build_checkpoints(DAY, BEFORE)
 before = {c["due_at"] for c in eng5.checkpoints(DAY)}
 now5 = datetime(2026, 8, 25, 18, 0, tzinfo=TZ)
 r5 = eng5.apply_offset(DAY, now5, 60, "meeting ran over")

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import Forbidden
 from telegram.ext import (Application, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
@@ -54,8 +55,50 @@ class LockstepBot:
         return update.effective_chat.id == self.lock.guardian_id()
 
     async def send_user(self, text: str, **kw) -> None:
-        await self.app.bot.send_message(self.cfg.user_chat_id, text,
-                                        parse_mode=ParseMode.HTML, **kw)
+        """Send, and treat a block as an event rather than an error.
+
+        Blocking the bot is the cheapest possible way out: no password, no
+        reason, two taps. It cannot be prevented -- Telegram gives every user
+        that button and should. What it can be is *loud*. Telegram returns 403
+        the moment we try to message a user who has blocked us, so the attempt
+        to disappear is itself the signal that reports you.
+
+        Note what does NOT stop: the phone siren. MacroDroid polls the server
+        directly and never touches Telegram, and debt keeps climbing because a
+        blocked bot cannot receive your photos. Blocking makes it worse, not
+        quieter.
+        """
+        try:
+            await self.app.bot.send_message(self.cfg.user_chat_id, text,
+                                            parse_mode=ParseMode.HTML, **kw)
+        except Forbidden:
+            await self._on_blocked()
+        else:
+            if self.db.lock()["blocked_since"]:
+                await self._on_unblocked()
+
+    async def _on_blocked(self) -> None:
+        if self.db.lock()["blocked_since"]:
+            return                                   # already reported
+        now = self.cfg.now()
+        self.db.set_lock(blocked_since=now.isoformat())
+        self.ledger.append("bot_blocked", {"at": now.isoformat()})
+        log.warning("user has blocked the bot")
+        await self.send_guardian(
+            "🚫 <b>Ansar has blocked the bot on Telegram.</b>\n\n"
+            "That stops it messaging him, and it needed no password and no reason. "
+            "It does not stop the system: his phone alarm runs off the server "
+            "directly and will keep going, and his missed checkpoints keep counting.\n\n"
+            "You are being told because a quiet exit was the whole thing this was "
+            "built to prevent.")
+
+    async def _on_unblocked(self) -> None:
+        since = self.db.lock()["blocked_since"]
+        self.db.set_lock(blocked_since=None)
+        self.ledger.append("bot_unblocked", {"was_blocked_since": since})
+        await self.send_guardian(
+            f"✅ Ansar has unblocked the bot. It was blocked since "
+            f"{datetime.fromisoformat(since):%d %b %H:%M}.")
 
     async def send_guardian(self, text: str, **kw) -> None:
         gid = self.lock.guardian_id()
@@ -144,6 +187,8 @@ class LockstepBot:
             f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'}",
             f"Phone agent: {self._phone_status(now)}",
         ]
+        if row["blocked_since"]:
+            lines.append("🚫 <b>You have this bot blocked</b> — your father was told.")
         if self.engine.has_plan(today):
             sc = self.engine.score(today, now)
             lines.append(f"Today: {sc['hit']}/{sc['due']} checkpoints ({sc['pct']}%)")
@@ -801,6 +846,8 @@ class LockstepBot:
             lines.append(f"Offset used: {html.escape(row['offset_reason'] or '')}")
         if not (row and row["plan_locked"]):
             lines.append("⚠️ No plan was submitted for this day.")
+        if self.db.lock()["blocked_since"]:
+            lines.append("🚫 Bot is currently blocked on Telegram.")
         lines.append(f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'} · <code>{tip[:12]}</code>")
         return "\n".join(lines)
 

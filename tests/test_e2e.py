@@ -40,7 +40,10 @@ async def main():
     planner.validate_coverage(blocks, 16 * 60, 22 * 60)
     db.replace_blocks(today, [b.as_tuple() for b in blocks])
     db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
-    eng.build_checkpoints(today)
+    # Before the window, so nothing is born excused whatever time this runs.
+    before = datetime.combine(today, datetime.min.time(),
+                              tzinfo=cfg.tz).replace(hour=15, minute=59)
+    eng.build_checkpoints(today, before)
 
     runner = web.AppRunner(build_app(cfg, eng, led))
     await runner.setup()

@@ -42,7 +42,7 @@ blocks = planner.parse("""16:00-16:40 commute to MNU library
 planner.validate_coverage(blocks, 16*60, 22*60)
 db.replace_blocks(DAY, [b.as_tuple() for b in blocks])
 db.run("UPDATE days SET plan_locked=1, plan_submitted_at=? WHERE date=?", (T(15,0).isoformat(), DAY.isoformat()))
-n = eng.build_checkpoints(DAY)["made"]
+n = eng.build_checkpoints(DAY, T(15, 59))["made"]
 check("checkpoints for 16:00-22:00 @15min", n, 24)
 check("debt cleared once planned", eng.debt_seconds(DAY, T(16, 30)), 0)
 
@@ -121,7 +121,7 @@ db2.ensure_day(DAY)
 bl = planner.parse("16:00-22:00 work: essay")
 db2.replace_blocks(DAY, [b.as_tuple() for b in bl])
 db2.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
-eng2.build_checkpoints(DAY)
+eng2.build_checkpoints(DAY, T(15, 59))
 
 eng2.tick(T(16, 0))                       # normal tick; records last_tick_at
 check("first tick asks", len(eng2.checkpoints(DAY)), 24)
@@ -169,7 +169,7 @@ db4.ensure_day(DAY)
 bl4 = planner.parse("16:00-22:00 work: essay")
 db4.replace_blocks(DAY, [b.as_tuple() for b in bl4])
 db4.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
-eng4.build_checkpoints(DAY)
+eng4.build_checkpoints(DAY, T(15, 59))
 check("tomorrow is unplanned", eng4.has_plan(DAY + timedelta(days=1)), False)
 nags = 0
 t = T(19, 58)

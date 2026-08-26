@@ -39,8 +39,11 @@ class FakeUpdate:
 
 
 class FakeBot:
-    def __init__(self): self.sent: list[tuple[int, str]] = []
+    def __init__(self): self.sent: list[tuple[int, str]] = []; self.blocked_by = set()
     async def send_message(self, chat_id, text, **_kw):
+        if chat_id in self.blocked_by:
+            from telegram.error import Forbidden
+            raise Forbidden("bot was blocked by the user")
         self.sent.append((chat_id, text)); return None
     def to(self, chat_id): return [t for c, t in self.sent if c == chat_id]
 
@@ -260,5 +263,50 @@ u4 = FakeUpdate("/setguardian 12345")
 run(bot.cmd_setguardian(u4, None))
 check("swap refused", "already set" in u4.message.last, True)
 check("still the original guardian", lk.guardian_id(), DAD)
+
+print("\n=== blocking the bot cannot be a quiet exit ===")
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
+run(bot.send_user("checkpoint due"))
+check("normal send works", len(bot.app.bot.to(USER)), 1)
+check("not marked blocked", db.lock()["blocked_since"], None)
+
+bot.app.bot.blocked_by.add(USER)             # he blocks the bot
+run(bot.send_user("checkpoint due"))
+check("block detected", db.lock()["blocked_since"] is not None, True)
+g = bot.app.bot.to(GUARDIAN)
+check("father is told immediately", len(g), 1)
+check("told it needed no password", "no password" in g[0], True)
+check("told the siren keeps running", "keep going" in g[0], True)
+check("recorded in the tamper-evident log",
+      "bot_blocked" in [r["kind"] for r in db.q("SELECT kind FROM events")], True)
+
+run(bot.send_user("another checkpoint"))
+check("father is not spammed on every later send", len(bot.app.bot.to(GUARDIAN)), 1)
+
+bot.app.bot.blocked_by.discard(USER)         # he unblocks
+run(bot.send_user("checkpoint due"))
+check("unblock detected", db.lock()["blocked_since"], None)
+check("father told it was lifted",
+      "unblocked" in bot.app.bot.to(GUARDIAN)[-1], True)
+check("both events in the log",
+      [r["kind"] for r in db.q("SELECT kind FROM events") if r["kind"].startswith("bot_")],
+      ["bot_blocked", "bot_unblocked"])
+
+print("\n=== ...and the phone siren is unaffected by any of it ===")
+today = cfg.today()
+db.ensure_day(today)
+db.replace_blocks(today, [(16*60, 22*60, "work: essay", "work")])
+db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
+noon = datetime.combine(today, datetime.min.time(), tzinfo=cfg.tz).replace(hour=18)
+eng.build_checkpoints(today, datetime.combine(today, datetime.min.time(),
+                                              tzinfo=cfg.tz).replace(hour=15, minute=59))
+db.run("UPDATE checkpoints SET state='overdue', asked_at=? WHERE date=? AND due_at <= ?",
+       (noon.isoformat(), today.isoformat(), noon.isoformat()))
+db.set_lock(blocked_since=noon.isoformat())
+st = eng.agent_state(noon)
+check("agent state ignores the block entirely", st.active, True)
+check("siren still armed", st.phone_alarm, True)
+print(f"       debt {st.debt_minutes} min, alarm {st.alarm_repeats}x/min — served over HTTP, not Telegram")
 
 sys.exit(report("BOT TESTS"))
