@@ -144,12 +144,20 @@ class Validator:
         self.cfg = cfg
         self._client = None
         self.consecutive_failures = 0
+        self.last_model = ""
 
     def _get_client(self):
         if self._client is None:
             from google import genai
             self._client = genai.Client(api_key=self.cfg.raw["gemini"]["api_key"])
         return self._client
+
+    def _model_chain(self) -> list[str]:
+        g = self.cfg.raw["gemini"]
+        chain = list(g.get("models") or [])
+        if g.get("model") and g["model"] not in chain:
+            chain.insert(0, g["model"])
+        return chain or ["gemini-3.1-flash-lite"]
 
     async def _ask(self, image_bytes: bytes, mime: str, prompt: str) -> dict:
         from google.genai import types
@@ -165,20 +173,37 @@ class Validator:
         if budget is not None:
             extra["thinking_config"] = types.ThinkingConfig(thinking_budget=int(budget))
 
-        resp = await client.aio.models.generate_content(
-            model=self.cfg.raw["gemini"]["model"],
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime),
-                prompt,
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                response_mime_type="application/json",
-                response_schema=RESPONSE_SCHEMA,
-                **extra,
-            ),
+        # The free tier caps requests per day *per model*, so a second model is
+        # a second allowance rather than a way around one limit. It doubles as
+        # plain robustness: if one model is having a bad day, the check still
+        # happens instead of silently passing everything through unverified.
+        cfg = types.GenerateContentConfig(
+            temperature=0.0,
+            response_mime_type="application/json",
+            response_schema=RESPONSE_SCHEMA,
+            **extra,
         )
-        return json.loads(resp.text)
+        last: Exception | None = None
+        for model in self._model_chain():
+            try:
+                resp = await client.aio.models.generate_content(
+                    model=model,
+                    contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime),
+                              prompt],
+                    config=cfg,
+                )
+                if model != self._model_chain()[0]:
+                    log.info("fell back to %s", model)
+                self.last_model = model
+                return json.loads(resp.text)
+            except Exception as exc:                          # noqa: BLE001
+                last = exc
+                text = str(exc)
+                if "RESOURCE_EXHAUSTED" in text or "429" in text:
+                    log.warning("%s out of quota, trying the next model", model)
+                    continue
+                raise
+        raise last if last else RuntimeError("no models configured")
 
     async def check(self, image_bytes: bytes, label: str, category: str,
                     now: datetime, mime: str = "image/jpeg",
@@ -204,6 +229,13 @@ class Validator:
                 break
             except Exception as exc:                        # noqa: BLE001
                 last_err = exc
+                # Out of quota or credit on every model is not a transient
+                # failure -- retrying just burns time while someone stands there
+                # holding a phone. Give up immediately and say why.
+                text = str(exc)
+                if "RESOURCE_EXHAUSTED" in text or "429" in text:
+                    log.error("every model is out of quota/credit; not retrying")
+                    break
                 log.warning("gemini attempt %d failed: %s", attempt + 1, exc)
                 await asyncio.sleep(2 ** attempt)
 
@@ -211,10 +243,13 @@ class Validator:
             # Infrastructure failed, not the person. Accept, but mark it loudly:
             # a silently-accepted photo would otherwise be farmable during an outage.
             self.consecutive_failures += 1
+            quota = "RESOURCE_EXHAUSTED" in str(last_err) or "429" in str(last_err)
+            why = ("Out of API quota or credit — nothing is being checked right now."
+                   if quota else f"Could not reach the vision model ({last_err}).")
             return Verdict(
                 ok=True, unverified=True, failure_code="unverified",
-                reason=f"Could not reach the vision model ({last_err}). "
-                       "Accepted this one, but it is flagged in the log.",
+                reason=f"{why} Accepted this one, but it is flagged in the log "
+                       "and your father has been told.",
             )
         self.consecutive_failures = 0
 

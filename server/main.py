@@ -59,6 +59,27 @@ def main() -> None:
     # The agent API shares the bot's event loop, so there is one process to run,
     # one process to supervise, and one thing that can be down.
     async def _post_init(application) -> None:
+        # Close the enrolment loop automatically: if we know who the guardian is
+        # but they have not set a password, send them the code directly. It never
+        # passes through the user's chat.
+        if not lock.is_configured and lock.guardian_id():
+            code = lock.new_setup_token()
+            try:
+                await application.bot.send_message(
+                    lock.guardian_id(),
+                    "You are the guardian for Ansar's accountability system.\n\n"
+                    "He cannot switch it off before the agreed date without a password "
+                    "only you know. To set it, reply with:\n\n"
+                    f"<code>/guardian {code} your-chosen-password</code>\n\n"
+                    "Choose something he will not guess, write it in your notes app, "
+                    "and I will delete your message the moment I have read it.\n\n"
+                    "You will get one short report each evening, and a message the "
+                    "instant he asks to stop.",
+                    parse_mode="HTML")
+                log.info("sent setup code to guardian %s", lock.guardian_id())
+            except Exception as exc:                          # noqa: BLE001
+                log.error("could not reach guardian: %s", exc)
+
         from aiohttp import web
         runner = web.AppRunner(build_app(cfg, engine, ledger))
         await runner.setup()
