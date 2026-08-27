@@ -152,7 +152,8 @@ class LockstepBot:
             "/plan — write the plan for the next day\n"
             "/today — today's plan and where you stand\n"
             "/status — system state and days remaining\n"
-            "/more 30 — the task you're on needs longer; pushes the rest back\n"
+            "/more 30 — the task you're on needs longer; takes time from later\n"
+            "/replan — rewrite the rest of today; the end time stays fixed\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
@@ -277,6 +278,77 @@ class LockstepBot:
         await update.message.reply_text(
             f"✅ Locked in for <b>{target:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n{tail}",
             parse_mode=ParseMode.HTML)
+
+    async def cmd_replan(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Rewrite the rest of today. The past and the end time stay fixed."""
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        today = now.date()
+        if not self.engine.has_plan(today):
+            await update.message.reply_text("No plan today yet — use /plan.")
+            return
+        if not self.engine.in_window(now):
+            await update.message.reply_text(
+                "The window isn't open. Use /plan for a future day.")
+            return
+
+        minute = now.hour * 60 + now.minute
+        _, end = self.engine.window(today)
+        lines = update.message.text.splitlines()
+        head = lines[0].partition(" ")[2].strip()
+        body = "\n".join(x for x in ("\n".join(lines[1:]).strip(), head) if x).strip()
+
+        if not body:
+            cur = [planner.Block(b["start_min"], b["end_min"], b["label"], b["category"])
+                   for b in self.db.blocks(today) if b["end_min"] > minute]
+            self.pending[update.effective_chat.id] = {"action": "replan"}
+            await update.message.reply_text(
+                f"Rewriting <b>{minute//60:02d}:{minute%60:02d}–"
+                f"{end//60:02d}:{end%60:02d}</b>. What's already happened stays on "
+                f"the record, and the day still ends at {end//60:02d}:{end%60:02d} — "
+                f"you're rearranging the time you have left, not adding to it.\n\n"
+                f"Currently:\n{planner.render(cur)}\n\n"
+                f"Send the replacement, same format.",
+                parse_mode=ParseMode.HTML)
+            return
+        await self._accept_replan(update, body)
+
+    async def _accept_replan(self, update: Update, text: str) -> None:
+        now = self.cfg.now()
+        today = now.date()
+        minute = now.hour * 60 + now.minute
+        _, end = self.engine.window(today)
+        try:
+            blocks = planner.parse(text)
+            planner.validate_coverage(blocks, minute, end)
+        except planner.PlanError as exc:
+            await update.message.reply_text(
+                f"❌ {html.escape(str(exc))}", parse_mode=ParseMode.HTML)
+            return
+
+        kept = [b for b in self.db.blocks(today) if b["start_min"] < minute]
+        rows = [(b["start_min"], min(b["end_min"], minute), b["label"], b["category"])
+                for b in kept]
+        rows += [(max(b.start_min, minute), b.end_min, b.label, b.category)
+                 for b in blocks if b.end_min > minute]
+        self.db.replace_blocks(today, rows)
+        self.db.run(
+            "DELETE FROM checkpoints WHERE date=? AND state='scheduled' AND due_at > ?",
+            (today.isoformat(), now.isoformat()))
+        built = self.engine.build_checkpoints(today, now)
+        self.ledger.append("replanned", {"date": today.isoformat(),
+                                         "from": f"{minute//60:02d}:{minute%60:02d}"})
+        self.pending.pop(update.effective_chat.id, None)
+
+        await update.message.reply_text(
+            f"✅ Rest of today rewritten.\n\n{planner.render(blocks)}\n\n"
+            f"{built['live']} checkpoints ahead. Day still ends at "
+            f"{end//60:02d}:{end%60:02d}.",
+            parse_mode=ParseMode.HTML)
+        await self.send_guardian(
+            f"📝 Ansar rewrote the rest of today from "
+            f"{minute//60:02d}:{minute%60:02d}. The day still ends at the same time.")
 
     async def cmd_today(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
@@ -528,14 +600,22 @@ class LockstepBot:
             return
 
         res = self.engine.extend_block(today, now, block["id"], minutes)
+        if res.get("error"):
+            await update.message.reply_text(res["error"])
+            return
         _, end = self.engine.window(today)
+        cost = []
+        for label, mins in res["shortened"]:
+            cost.append(f"• <b>{html.escape(label)}</b> loses {mins} min")
+        for label in res["dropped"]:
+            cost.append(f"• <b>{html.escape(label)}</b> is gone")
         await update.message.reply_text(
-            f"⏱ <b>{html.escape(res['label'])}</b> extended by {minutes} min "
-            f"— now runs to {res['new_end']//60:02d}:{res['new_end']%60:02d}.\n\n"
-            f"Everything after moved back. Your day now ends at "
-            f"<b>{end//60:02d}:{end%60:02d}</b>, so you're spending the evening on "
-            f"this, not getting it free.\n\n"
-            f"Used {used + minutes} of {cap} min today.",
+            f"⏱ <b>{html.escape(res['label'])}</b> now runs to "
+            f"{res['new_end']//60:02d}:{res['new_end']%60:02d}.\n\n"
+            f"<b>Paid for by:</b>\n" + "\n".join(cost) + "\n\n"
+            f"Your day still ends at {end//60:02d}:{end%60:02d} — bedtime doesn't move. "
+            f"Used {res['minutes'] + used} of {cap} min today.\n\n"
+            f"If that's the wrong trade, use /replan instead and choose yourself.",
             parse_mode=ParseMode.HTML)
 
     async def cmd_mute(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -769,6 +849,9 @@ class LockstepBot:
         if action == "plan":
             await self._accept_plan(update, pend["date"], text)
             return
+        if action == "replan":
+            await self._accept_replan(update, text)
+            return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
             return
@@ -985,7 +1068,7 @@ class LockstepBot:
             ("setguardian", self.cmd_setguardian),
             ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
-            ("more", self.cmd_more),
+            ("more", self.cmd_more), ("replan", self.cmd_replan),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

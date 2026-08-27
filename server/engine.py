@@ -74,9 +74,11 @@ class Engine:
     def window(self, day: date) -> tuple[int, int]:
         """Enforcement window, in minutes past midnight, including any shifts."""
         row = self.db.day(day)
-        shift = 0
-        if row:
-            shift = (row["offset_minutes"] or 0) + (row["extend_minutes"] or 0)
+        # Only an offset (something outside the plan happened) moves the end of
+        # the day. Extending a task does not: the day is finite, and letting an
+        # overrun push bedtime later is how a productivity system quietly turns
+        # into a sleep-debt machine. Extra time comes out of something else.
+        shift = (row["offset_minutes"] or 0) if row else 0
         return self.cfg.enforce_start_min, self.cfg.enforce_end_min + shift
 
     def in_window(self, now: datetime) -> bool:
@@ -531,35 +533,57 @@ class Engine:
         return row is not None
 
     def extend_block(self, day: date, now: datetime, block_id: int, minutes: int) -> dict:
-        """Give the current task more time, pushing the rest of the day back.
+        """Give the current task more time, taken from what comes after it.
 
-        Distinct from an offset. An offset is for when something outside the
-        plan happened; this is for when the plan was simply optimistic and the
-        work is still going. Punishing an overrun would push you to stop working
-        in order to satisfy a schedule, which is exactly backwards.
-
-        It costs you the time: everything after shifts later and the window ends
-        later. You are not getting the evening back, you are spending it here.
+        The day does not get longer. Everything following shrinks to pay for it,
+        starting with the next block, and anything squeezed to nothing is
+        dropped. That is the honest arithmetic: an hour spent here is an hour
+        not spent there, and the system should make you feel that rather than
+        hide it by moving bedtime.
         """
         block = self.db.one("SELECT * FROM blocks WHERE id = ?", (block_id,))
-        self.db.run("UPDATE blocks SET end_min = end_min + ? WHERE id = ?", (minutes, block_id))
-        self.db.run(
-            "UPDATE blocks SET start_min = start_min + ?, end_min = end_min + ? "
-            "WHERE date = ? AND start_min >= ?",
-            (minutes, minutes, day.isoformat(), block["end_min"]))
-        self.db.run(
-            "UPDATE days SET extend_minutes = extend_minutes + ? WHERE date = ?",
-            (minutes, day.isoformat()))
-        # Rebuild everything still ahead; the old times belong to the old shape.
+        _, window_end = self.window(day)
+        later = [b for b in self.db.blocks(day) if b["start_min"] >= block["end_min"]]
+
+        available = sum(min(b["end_min"], window_end) - b["start_min"] for b in later)
+        if available <= 0:
+            return {"error": "This is the last block of the day — nothing left to take from."}
+        minutes = min(minutes, available - 1)      # never consume the day entirely
+        if minutes <= 0:
+            return {"error": "There isn't enough time left in the day for that."}
+
+        self.db.run("UPDATE blocks SET end_min = end_min + ? WHERE id = ?",
+                    (minutes, block_id))
+
+        # Walk forward taking time until the debt is paid.
+        owed, cursor, shortened, dropped = minutes, block["end_min"] + minutes, [], []
+        for b in later:
+            length = b["end_min"] - b["start_min"]
+            if owed >= length:
+                self.db.run("DELETE FROM blocks WHERE id = ?", (b["id"],))
+                dropped.append(b["label"])
+                owed -= length
+                continue
+            self.db.run("UPDATE blocks SET start_min = ?, end_min = ? WHERE id = ?",
+                        (cursor, cursor + (length - owed), b["id"]))
+            if owed:
+                shortened.append((b["label"], owed))
+            cursor += length - owed
+            owed = 0
+
+        self.db.run("UPDATE days SET extend_minutes = extend_minutes + ? WHERE date = ?",
+                    (minutes, day.isoformat()))
         self.db.run(
             "DELETE FROM checkpoints WHERE date=? AND state='scheduled' AND due_at > ?",
             (day.isoformat(), now.isoformat()))
-        built = self.build_checkpoints(day, now)
+        self.build_checkpoints(day, now)
         self.ledger.append("block_extended",
                            {"date": day.isoformat(), "block": block["label"],
-                            "minutes": minutes})
+                            "minutes": minutes, "dropped": dropped,
+                            "shortened": [f"{l} -{m}m" for l, m in shortened]})
         return {"label": block["label"], "minutes": minutes,
-                "new_end": block["end_min"] + minutes, "added": built["live"]}
+                "new_end": block["end_min"] + minutes,
+                "dropped": dropped, "shortened": shortened}
 
     # -- offset ----------------------------------------------------------------
     def apply_offset(self, day: date, now: datetime, minutes: int, reason: str) -> dict:

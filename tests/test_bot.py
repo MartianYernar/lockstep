@@ -353,11 +353,19 @@ db.run("UPDATE checkpoints SET state='satisfied' WHERE id=?", (cp["id"],))
 before_end = eng.window(today)[1]
 u = FakeUpdate("/more 30")
 run(bot.cmd_more(u, None))
-ends = [b["end_min"] for b in db.blocks(today)]
+blocks = db.blocks(today)
+ends = [b["end_min"] for b in blocks]
 check("current block gained 30 min", ends[0], 18*60 + 30)
-check("later blocks pushed back", ends[1:], [20*60 + 30, 22*60 + 30])
-check("the day ends later — you spend the time", eng.window(today)[1], before_end + 30)
+check("the day does NOT get longer", eng.window(today)[1], before_end)
+check("bedtime is not pushed back", ends[-1], 22*60)
+# the next block pays for it by losing the time, not by moving
+check("next block starts later and ends the same", (blocks[1]["start_min"], blocks[1]["end_min"]),
+      (18*60 + 30, 20*60))
+check("so it is 30 min shorter",
+      (blocks[1]["end_min"] - blocks[1]["start_min"]), 90)
 check("says where it now ends", "18:30" in u.message.last, True)
+check("says what paid for it", "Paid for by" in u.message.last, True)
+check("names the block that lost time", "essay" in u.message.last, True)
 
 u = FakeUpdate("/more 90")
 run(bot.cmd_more(u, None))
