@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS days (
     offset_minutes    INTEGER NOT NULL DEFAULT 0,
     offset_reason     TEXT,
     checkpoints_built INTEGER NOT NULL DEFAULT 0,
-    reported          INTEGER NOT NULL DEFAULT 0
+    reported          INTEGER NOT NULL DEFAULT 0,
+    extend_minutes    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS blocks (
@@ -98,6 +99,9 @@ class Database:
 
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
+        dhave = {r["name"] for r in self.conn.execute("PRAGMA table_info(days)")}
+        if "extend_minutes" not in dhave:
+            self.conn.execute("ALTER TABLE days ADD COLUMN extend_minutes INTEGER NOT NULL DEFAULT 0")
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(lock_state)")}
         for col, decl in (("last_tick_at", "TEXT"), ("last_agent_poll", "TEXT"),
                           ("guardian_chat_id", "INTEGER"), ("blocked_since", "TEXT"),

@@ -152,6 +152,7 @@ class LockstepBot:
             "/plan — write the plan for the next day\n"
             "/today — today's plan and where you stand\n"
             "/status — system state and days remaining\n"
+            "/more 30 — the task you're on needs longer; pushes the rest back\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
@@ -483,6 +484,59 @@ class LockstepBot:
             return
         self.db.set_lock(siren_test_until=None)
         await update.message.reply_text("🔕 Test siren off. Stops within a minute.")
+
+    async def cmd_more(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Give the task you're on right now more time."""
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        today = now.date()
+        parts = update.message.text.split()
+        minutes = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 30
+
+        if not self.engine.in_window(now):
+            await update.message.reply_text("The window isn't open — nothing to extend.")
+            return
+        if not self.engine.has_plan(today):
+            await update.message.reply_text("No plan today. Send /plan.")
+            return
+        block = self.engine.current_block(today, now)
+        if block is None:
+            await update.message.reply_text("You're not inside a planned block right now.")
+            return
+
+        cap = int(self.cfg.raw.get("extend", {}).get("max_minutes_per_day", 90))
+        used = (self.db.day(today)["extend_minutes"] or 0)
+        minutes = max(5, min(minutes, 120))
+        if used + minutes > cap:
+            await update.message.reply_text(
+                f"That would put you {used + minutes} min over for the day, and the "
+                f"limit is {cap}. You've used {used} so far.\n\n"
+                "Plans that need more than this much stretching were written wrong. "
+                "Write tomorrow's with bigger blocks instead.")
+            return
+
+        # You can only extend something you have already proven you're doing.
+        # Otherwise this is just a way to push the whole day back by claiming to
+        # be busy, which is an offset wearing a disguise.
+        if not self.engine.block_was_proven(today, block["id"]):
+            await update.message.reply_text(
+                f"Send a photo of <b>{html.escape(block['label'])}</b> first.\n\n"
+                "You can only extend a task you've shown you're actually doing — "
+                "otherwise this is just the offset with extra steps.",
+                parse_mode=ParseMode.HTML)
+            return
+
+        res = self.engine.extend_block(today, now, block["id"], minutes)
+        _, end = self.engine.window(today)
+        await update.message.reply_text(
+            f"⏱ <b>{html.escape(res['label'])}</b> extended by {minutes} min "
+            f"— now runs to {res['new_end']//60:02d}:{res['new_end']%60:02d}.\n\n"
+            f"Everything after moved back. Your day now ends at "
+            f"<b>{end//60:02d}:{end%60:02d}</b>, so you're spending the evening on "
+            f"this, not getting it free.\n\n"
+            f"Used {used + minutes} of {cap} min today.",
+            parse_mode=ParseMode.HTML)
 
     async def cmd_mute(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Silence the phone for a while. Only while there is no commitment.
@@ -931,6 +985,7 @@ class LockstepBot:
             ("setguardian", self.cmd_setguardian),
             ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
+            ("more", self.cmd_more),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

@@ -49,6 +49,13 @@ commitment:
   months: 3                 # you cannot disable before start + this many months
   total_months: 12          # the full run you're aiming at
 
+extend:
+  # /more — the task you're on is overrunning and still going. Different from
+  # an offset: nothing external happened, the plan was just optimistic.
+  # Costs you the time (the day ends later), and only works on a block you have
+  # already sent a valid photo for.
+  max_minutes_per_day: 90
+
 offset:
   max_per_day: 1
   minutes: 60

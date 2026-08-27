@@ -328,4 +328,46 @@ run(bot.cmd_testsiren(FakeUpdate("/testsiren 120"), None))
 run(bot.cmd_stopsiren(FakeUpdate("/stopsiren"), None))
 check("/stopsiren ends it", eng.agent_state(noon).phone_alarm, False)
 
+print("\n=== /more: extend the task you are actually doing ===")
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+noon = datetime.combine(today, datetime.min.time(), tzinfo=cfg.tz).replace(hour=17)
+cfg.now = lambda: noon
+db.ensure_day(today)
+db.replace_blocks(today, [(16*60, 18*60, "work: hackathon", "work"),
+                          (18*60, 20*60, "work: essay", "work"),
+                          (20*60, 22*60, "relax", "relax")])
+db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
+eng.build_checkpoints(today, datetime.combine(today, datetime.min.time(),
+                                              tzinfo=cfg.tz).replace(hour=15, minute=59))
+
+u = FakeUpdate("/more 30")
+run(bot.cmd_more(u, None))
+check("refused before you've proven you're on it", "photo of" in u.message.last, True)
+check("nothing moved", [b["end_min"] for b in db.blocks(today)], [18*60, 20*60, 22*60])
+
+# prove it
+cp = eng.current_checkpoint(today, noon) or eng.checkpoints(today)[0]
+db.run("UPDATE checkpoints SET state='satisfied' WHERE id=?", (cp["id"],))
+
+before_end = eng.window(today)[1]
+u = FakeUpdate("/more 30")
+run(bot.cmd_more(u, None))
+ends = [b["end_min"] for b in db.blocks(today)]
+check("current block gained 30 min", ends[0], 18*60 + 30)
+check("later blocks pushed back", ends[1:], [20*60 + 30, 22*60 + 30])
+check("the day ends later — you spend the time", eng.window(today)[1], before_end + 30)
+check("says where it now ends", "18:30" in u.message.last, True)
+
+u = FakeUpdate("/more 90")
+run(bot.cmd_more(u, None))
+check("daily cap enforced", "limit is 90" in u.message.last, True)
+check("nothing moved past the cap", [b["end_min"] for b in db.blocks(today)][0], 18*60 + 30)
+
+evening = datetime.combine(today, datetime.min.time(), tzinfo=cfg.tz).replace(hour=23)
+cfg.now = lambda: evening
+u = FakeUpdate("/more 30")
+run(bot.cmd_more(u, None))
+check("refused outside the window", "isn't open" in u.message.last, True)
+
 sys.exit(report("BOT TESTS"))
