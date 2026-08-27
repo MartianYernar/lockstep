@@ -59,15 +59,18 @@ escalation:
   step_minutes: 20             # escalation level goes up every this many minutes behind
   phone_poll_sec: 60           # how often the phone asks the server how you're doing
   phone_alarm_after_min: 5     # start the alarm-stream siren after this much debt
-  phone_alarm_volume_pct: 55   # % of the ALARM stream's max. Loud enough to be
-                               # impossible to ignore, not so loud it's painful.
-                               # Your ringtone and media volume are never touched.
+  phone_alarm_volume_pct: 70   # % of the ALARM stream's max. Tune this: 55 was
+                               # the first guess and turned out too quiet in
+                               # practice. Your ringtone and media volume are
+                               # never touched either way.
 
   # Escalation is repetition, not volume: the siren stays at the percentage
   # above, but goes off more times per minute the further behind you get.
-  phone_repeats_base: 1        # times it sounds per poll at level 0
-  phone_repeats_per_step: 1    # +this many per 20 minutes behind
-  phone_repeats_max: 4         # ceiling
+  # The macro only fires once a minute, so a single beep leaves 58 seconds of
+  # silence -- easy to sit through. These control how long each burst lasts.
+  phone_repeats_base: 3        # times it sounds per poll at level 0
+  phone_repeats_per_step: 2    # +this many per 20 minutes behind
+  phone_repeats_max: 10        # ceiling
 
 vision:
   timestamp_tolerance_min: 12  # how stale a visible clock may be

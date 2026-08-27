@@ -58,9 +58,15 @@ Inside the IF:
   enough that you can't work through it and not loud enough to hurt.*
 
 - **Loop** → repeat `data[alarm_repeats]` times, containing:
-  - **Play Sound** — something genuinely irritating, Stream: **Alarm**
+  - **Play Sound** — Stream: **Alarm**, and tick **Block next actions until
+    complete** so the sound finishes instead of being cut off by the next loop
   - **Vibrate** → pattern: *Long*
   - **Wait Before Next Action** → 2 seconds
+
+  > Pick a long, harsh sound, not a short chime. The built-in tones are mostly
+  > polite notification blips that are over before you look up. `[Choose File]`
+  > and a real alarm mp3 is much better. The macro only runs once a minute, so
+  > whatever noise it makes has to happen in that one burst.
 
   *Escalation is repetition, not volume: twice a minute at 20 minutes behind,
   three times at 40, four at an hour. It never gets louder than you set.*
@@ -69,9 +75,15 @@ Inside the IF:
   - **Notification Id: `1`** — not 0. A non-zero id overwrites the previous
     notification; with 0 you get a fresh one every minute, so a twenty-minute
     siren leaves twenty notifications to clear.
-  - Title: `Lockstep — {v=data[debt_minutes]} min behind`
-  - Text: `{v=data[headline]}` — this is the useful field, it names the task
+  - Title: `Lockstep — {lv=data[debt_minutes]} min behind`
+  - Text: `{lv=data[headline]}` — this is the useful field, it names the task
     you are supposed to be photographing
+
+  > **`{lv=` not `{v=`.** MacroDroid uses `{lv=...}` for *local* variables and
+  > `{v=...}` only for *global* ones. `data` is local, so `{v=data[headline]}`
+  > prints the text literally instead of the value. The If condition and the
+  > Volume Change still work with the plain name — it's only magic text inside
+  > message fields that needs the prefix.
   - Priority **Max**, **Ongoing OFF**
 
   > Leave Ongoing off. With it on the notification cannot be dismissed, and the
