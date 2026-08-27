@@ -17,8 +17,8 @@ RAW = {
     "commitment": {"start": "2026-08-25", "months": 3, "total_months": 12},
     "offset": {"max_per_day": 1, "minutes": 60, "require_photo": True},
     "escalation": {"step_minutes": 20, "phone_poll_sec": 60, "phone_alarm_after_min": 5,
-                   "phone_alarm_volume_pct": 70, "phone_repeats_base": 3,
-                   "phone_repeats_per_step": 2, "phone_repeats_max": 10},
+                   "phone_alarm_volume_pct": 85, "phone_repeats_base": 10,
+                   "phone_repeats_per_step": 2, "phone_repeats_max": 15},
     "vision": {"timestamp_tolerance_min": 12, "min_confidence": 0.55, "max_retries": 3},
     "api": {"host": "127.0.0.1", "port": 8765, "token": "t"},
 }

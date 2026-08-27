@@ -56,16 +56,16 @@ check("missed at 16:06 (grace blown)", [a.kind for a in acts], ["mark_missed"])
 
 print("\n=== 4. escalation ladder (repetition grows, volume does not) ===")
 # 16:06 is only 1 min behind — under phone_alarm_after_min, so silence.
-for at, want_lvl, want_rep in [((16,6),0,0), ((16,11),0,3), ((16,24),0,3), ((16,25),1,5),
-                                ((16,26),1,5), ((16,46),2,7), ((17,6),3,9)]:
+for at, want_lvl, want_rep in [((16,6),0,0), ((16,11),0,10), ((16,24),0,10), ((16,25),1,12),
+                                ((16,26),1,12), ((16,46),2,14), ((17,6),3,15)]:
     tick(T(*at))
     s = eng.agent_state(T(*at))
     check(f"{at[0]:02d}:{at[1]:02d} level", s.level, want_lvl)
     check(f"{at[0]:02d}:{at[1]:02d} alarm repeats", s.alarm_repeats, want_rep)
-check("repeats capped", eng.agent_state(T(19, 0)).alarm_repeats, 10)
+check("repeats capped", eng.agent_state(T(19, 0)).alarm_repeats, 15)
 check("silent below the alarm threshold", eng.agent_state(T(16, 8)).phone_alarm, False)
 check("...but the level is still tracked", eng.agent_state(T(16, 8)).active, True)
-check("volume never escalates", eng.agent_state(T(19, 0)).alarm_volume_pct, 70)
+check("volume never escalates", eng.agent_state(T(19, 0)).alarm_volume_pct, 85)
 check("phone alarm on after 5min", eng.agent_state(T(16, 12)).phone_alarm, True)
 
 print("\n=== 5. one valid photo clears debt, older stay missed ===")

@@ -59,18 +59,27 @@ escalation:
   step_minutes: 20             # escalation level goes up every this many minutes behind
   phone_poll_sec: 60           # how often the phone asks the server how you're doing
   phone_alarm_after_min: 5     # start the alarm-stream siren after this much debt
-  phone_alarm_volume_pct: 70   # % of the ALARM stream's max. Tune this: 55 was
-                               # the first guess and turned out too quiet in
-                               # practice. Your ringtone and media volume are
+  phone_alarm_volume_pct: 85   # % of the ALARM stream's max. Tuned upward twice
+                               # from a first guess of 55 -- trust use, not
+                               # theory. Your ringtone and media volume are
                                # never touched either way.
+                               # If it still sounds quiet at 85, the problem is
+                               # the sound FILE, not the stream: a quiet mp3
+                               # stays quiet at any volume setting.
 
   # Escalation is repetition, not volume: the siren stays at the percentage
   # above, but goes off more times per minute the further behind you get.
   # The macro only fires once a minute, so a single beep leaves 58 seconds of
   # silence -- easy to sit through. These control how long each burst lasts.
-  phone_repeats_base: 3        # times it sounds per poll at level 0
+  phone_repeats_base: 10       # times it sounds per poll at level 0
   phone_repeats_per_step: 2    # +this many per 20 minutes behind
-  phone_repeats_max: 10        # ceiling
+  phone_repeats_max: 15        # ceiling -- see the warning below
+
+  # Keep the burst under ~50 seconds. The macro is triggered once a minute, so
+  # if one burst runs longer than that the next trigger lands on top of it and
+  # MacroDroid either queues or drops it. With a ~2s sound and a 1s wait, 15
+  # repeats is about 45s, which fits. If you raise the ceiling, shorten the
+  # wait in the macro to match.
 
 vision:
   timestamp_tolerance_min: 12  # how stale a visible clock may be
