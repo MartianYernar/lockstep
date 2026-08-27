@@ -49,7 +49,8 @@ Add these in order. Tap **+** under Actions and search each name.
 
 Inside the IF:
 
-- **Set Volume** → Stream: **Alarm** → value `data[alarm_volume_pct]` (percent)
+- **Volume Change** *(searching "set volume" finds it)* → Stream: **Alarm** →
+  value `data[alarm_volume_pct]`
 
   *This is the whole trick. Android's alarm stream ignores silent mode and Do
   Not Disturb and has its own slider — so this is very hard to mute while your
@@ -67,12 +68,21 @@ Inside the IF:
 - **Display Notification**
   - Title: `Lockstep — {v=data[debt_minutes]} min behind`
   - Text: `{v=data[headline]}`
-  - Priority **Max**, **Ongoing** on
+  - Priority **Max**, **Ongoing OFF**
 
-**4. Else**
+  > Leave Ongoing off. With it on the notification cannot be dismissed, and the
+  > only way to remove it is the "Clear Notifications" action — which wipes
+  > *every* notification on the phone, not just this one. Not worth it.
 
-- **Set Volume** → Stream: **Alarm** → back to your normal level (7 or so)
-- **Clear Notification** → the one above
+**4. Else** — this one is **not in the search list**
+
+Tap the **If clause** action already in your list, and choose **Add else
+clause** from its menu. MacroDroid inserts `Else` between your `If` and
+`End If` for you.
+
+Then, inside the Else branch:
+
+- **Volume Change** → Stream: **Alarm** → back to your normal level (7 or so)
 
 ---
 
