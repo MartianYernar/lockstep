@@ -297,7 +297,11 @@ class Engine:
                      if datetime.fromisoformat(c["due_at"]) <= now])
             detail = f"{n} checkpoint{'s' if n != 1 else ''} unanswered · {debt_min} min behind"
 
-        alarming = debt_min >= int(e["phone_alarm_after_min"])
+        # Mute silences the phone only. Checkpoints still come, debt still
+        # accrues, misses still count. It is a volume control, not a pause --
+        # otherwise it would just be a way out with extra steps.
+        muted = lock["muted_until"] and now < datetime.fromisoformat(lock["muted_until"])
+        alarming = debt_min >= int(e["phone_alarm_after_min"]) and not muted
         return AgentState(
             active=True, level=int(level), debt_minutes=int(debt_min),
             phone_alarm=alarming,

@@ -154,6 +154,7 @@ class LockstepBot:
             "/status — system state and days remaining\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
+            "/mute 3 — silence the siren for 3 hours (setup only)\n"
             "/disable — start the shutdown request\n\n"
             "During the window, just send the photo. No command needed.",
             parse_mode=ParseMode.HTML)
@@ -190,6 +191,9 @@ class LockstepBot:
         ]
         if row["blocked_since"]:
             lines.append("🚫 <b>You have this bot blocked</b> — your father was told.")
+        if row["muted_until"] and now < datetime.fromisoformat(row["muted_until"]):
+            lines.append(f"🔕 Siren muted until "
+                         f"{datetime.fromisoformat(row['muted_until']):%H:%M}")
         if self.engine.has_plan(today):
             sc = self.engine.score(today, now)
             lines.append(f"Today: {sc['hit']}/{sc['due']} checkpoints ({sc['pct']}%)")
@@ -479,6 +483,42 @@ class LockstepBot:
             return
         self.db.set_lock(siren_test_until=None)
         await update.message.reply_text("🔕 Test siren off. Stops within a minute.")
+
+    async def cmd_mute(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Silence the phone for a while. Only while there is no commitment.
+
+        This exists for setup and testing. Once the lock is live it refuses,
+        because a mute button available on a bad evening is just the exit door
+        with a friendlier label.
+        """
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        if self.lock.commitment_active(now.date()):
+            await update.message.reply_text(
+                "No. The commitment is live, and a mute button on a bad evening "
+                "is just the way out with a nicer name.\n\n"
+                "If something real has happened: /offset for an hour, or ask your "
+                "father for /pause.")
+            return
+        parts = update.message.text.split()
+        hours = float(parts[1]) if len(parts) > 1 and parts[1].replace(".", "").isdigit() else 3
+        hours = max(0.25, min(hours, 24))
+        until = now + timedelta(hours=hours)
+        self.db.set_lock(muted_until=until.isoformat(), siren_test_until=None)
+        self.ledger.append("muted", {"until": until.isoformat()})
+        await update.message.reply_text(
+            f"🔕 Phone siren muted until <b>{until:%H:%M}</b>.\n\n"
+            "Checkpoints still arrive and misses still count — this only silences "
+            "the noise. /unmute to end it early.\n\n"
+            "<i>This command stops working once the commitment is live.</i>",
+            parse_mode=ParseMode.HTML)
+
+    async def cmd_unmute(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        self.db.set_lock(muted_until=None)
+        await update.message.reply_text("🔔 Siren back on.")
 
     async def cmd_cancel(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self.pending.pop(update.effective_chat.id, None):
@@ -890,6 +930,7 @@ class LockstepBot:
             ("cancel", self.cmd_cancel), ("guardian", self.cmd_guardian),
             ("setguardian", self.cmd_setguardian),
             ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
+            ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

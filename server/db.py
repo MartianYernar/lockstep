@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS lock_state (
     last_agent_poll   TEXT,
     guardian_chat_id  INTEGER,
     blocked_since     TEXT,
-    siren_test_until  TEXT
+    siren_test_until  TEXT,
+    muted_until       TEXT
 );
 
 -- "Has this already happened?" for things that must fire exactly once.
@@ -100,7 +101,8 @@ class Database:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(lock_state)")}
         for col, decl in (("last_tick_at", "TEXT"), ("last_agent_poll", "TEXT"),
                           ("guardian_chat_id", "INTEGER"), ("blocked_since", "TEXT"),
-                          ("siren_test_until", "TEXT")):
+                          ("siren_test_until", "TEXT"),
+                          ("muted_until", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE lock_state ADD COLUMN {col} {decl}")
         self.conn.commit()
