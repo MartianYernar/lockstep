@@ -153,6 +153,7 @@ class LockstepBot:
             "/today — today's plan and where you stand\n"
             "/status — system state and days remaining\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
+            "/testsiren — fire the phone alarm now, to check it works\n"
             "/disable — start the shutdown request\n\n"
             "During the window, just send the photo. No command needed.",
             parse_mode=ParseMode.HTML)
@@ -451,6 +452,33 @@ class LockstepBot:
             "I'll delete your message as soon as I've read it.")
         await update.message.reply_text(
             "I've messaged him the setup code directly — you never see it.")
+
+    async def cmd_testsiren(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        parts = update.message.text.split()
+        secs = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 180
+        secs = max(30, min(secs, 600))
+        until = self.cfg.now() + timedelta(seconds=secs)
+        self.db.set_lock(siren_test_until=until.isoformat())
+        self.ledger.append("siren_test", {"seconds": secs})
+        await update.message.reply_text(
+            f"🔔 Test siren armed for <b>{secs} seconds</b>.\n\n"
+            "Your phone should start within a minute — that's the poll interval.\n\n"
+            "<b>While it's going, check all four:</b>\n"
+            "1. Put the phone on <b>silent</b> — it must keep sounding\n"
+            "2. Turn <b>media volume to zero</b> — it must keep sounding\n"
+            "3. Check your <b>ringtone</b> still works normally\n"
+            "4. Check it <b>vibrates</b> too\n\n"
+            "If it goes quiet on silent mode, Play Sound is on the wrong stream. "
+            "Send /stopsiren to end it early.",
+            parse_mode=ParseMode.HTML)
+
+    async def cmd_stopsiren(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        self.db.set_lock(siren_test_until=None)
+        await update.message.reply_text("🔕 Test siren off. Stops within a minute.")
 
     async def cmd_cancel(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self.pending.pop(update.effective_chat.id, None):
@@ -861,6 +889,7 @@ class LockstepBot:
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("guardian", self.cmd_guardian),
             ("setguardian", self.cmd_setguardian),
+            ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

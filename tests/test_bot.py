@@ -305,4 +305,27 @@ check("agent state ignores the block entirely", st.active, True)
 check("siren still armed", st.phone_alarm, True)
 print(f"       debt {st.debt_minutes} min, alarm {st.alarm_repeats}x/min — served over HTTP, not Telegram")
 
+print("\n=== /testsiren fires the alarm outside the window ===")
+cfg, db, led, eng, lk, bot, val = make()
+noon = datetime.combine(cfg.today(), datetime.min.time(), tzinfo=cfg.tz).replace(hour=12)
+cfg.now = lambda: noon
+check("nothing happening at noon", eng.agent_state(noon).phone_alarm, False)
+u = FakeUpdate("/testsiren 120")
+run(bot.cmd_testsiren(u, None))
+st = eng.agent_state(noon)
+check("siren armed", st.phone_alarm, True)
+check("at the configured volume, not louder", st.alarm_volume_pct, 55)
+check("agent sees it as active", st.active, True)
+check("headline says it is a test", "TEST" in st.headline, True)
+check("instructions mention silent mode", "silent" in u.message.last, True)
+
+later = noon + timedelta(seconds=121)
+cfg.now = lambda: later
+check("expires on its own", eng.agent_state(later).phone_alarm, False)
+
+cfg.now = lambda: noon
+run(bot.cmd_testsiren(FakeUpdate("/testsiren 120"), None))
+run(bot.cmd_stopsiren(FakeUpdate("/stopsiren"), None))
+check("/stopsiren ends it", eng.agent_state(noon).phone_alarm, False)
+
 sys.exit(report("BOT TESTS"))

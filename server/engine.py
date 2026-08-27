@@ -249,6 +249,20 @@ class Engine:
         idle = AgentState(False, 0, 0, False,
                           int(e0.get("phone_alarm_volume_pct", 55)), 0,
                           int(e0.get("phone_poll_sec", 60)), "", "")
+
+        # A siren you can fire on demand. Testing the punishment otherwise means
+        # waiting for the window to open and then deliberately ignoring a real
+        # checkpoint, which is a slow way to discover the audio stream is wrong.
+        test_until = lock["siren_test_until"]
+        if test_until and now < datetime.fromisoformat(test_until):
+            left = int((datetime.fromisoformat(test_until) - now).total_seconds())
+            return AgentState(
+                active=True, level=1, debt_minutes=0, phone_alarm=True,
+                alarm_volume_pct=int(e0.get("phone_alarm_volume_pct", 55)),
+                alarm_repeats=int(e0.get("phone_repeats_base", 1)),
+                poll_sec=int(e0.get("phone_poll_sec", 60)),
+                headline="TEST — this is what being behind sounds like",
+                detail=f"Test siren, {left}s left. Nothing is actually overdue.")
         if not lock["enabled"]:
             return idle
         if lock["paused_until"] and now < datetime.fromisoformat(lock["paused_until"]):
