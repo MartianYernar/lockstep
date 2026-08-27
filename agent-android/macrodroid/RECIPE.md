@@ -74,15 +74,22 @@ Inside the IF:
   > only way to remove it is the "Clear Notifications" action — which wipes
   > *every* notification on the phone, not just this one. Not worth it.
 
-**4. Else** — this one is **not in the search list**
+**4. No Else branch — deliberately**
 
-Tap the **If clause** action already in your list, and choose **Add else
-clause** from its menu. MacroDroid inserts `Else` between your `If` and
-`End If` for you.
+An earlier version of this recipe restored the alarm volume in an Else
+branch. Don't. The macro runs every minute, so an Else that sets the volume
+sets it *every minute you are not behind* — which means you can never change
+your own alarm volume again. Set it to 30% for a quiet morning and it snaps
+back within sixty seconds. That is exactly the failure the original design
+notes warned about: *"don't break volume control, so I can still change the
+volume for normal calls and alarms."*
 
-Then, inside the Else branch:
+With no Else, the alarm slider is only ever touched while you are actually
+behind. It goes to 55% during a siren and stays there afterwards, and you can
+change it whenever you like without the macro fighting you.
 
-- **Volume Change** → Stream: **Alarm** → back to your normal level (7 or so)
+(If you already added an Else, tap it and delete it along with the Volume
+Change inside it.)
 
 ---
 
