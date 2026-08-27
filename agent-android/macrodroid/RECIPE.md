@@ -66,8 +66,12 @@ Inside the IF:
   three times at 40, four at an hour. It never gets louder than you set.*
 
 - **Display Notification**
+  - **Notification Id: `1`** — not 0. A non-zero id overwrites the previous
+    notification; with 0 you get a fresh one every minute, so a twenty-minute
+    siren leaves twenty notifications to clear.
   - Title: `Lockstep — {v=data[debt_minutes]} min behind`
-  - Text: `{v=data[headline]}`
+  - Text: `{v=data[headline]}` — this is the useful field, it names the task
+    you are supposed to be photographing
   - Priority **Max**, **Ongoing OFF**
 
   > Leave Ongoing off. With it on the notification cannot be dismissed, and the
