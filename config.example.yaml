@@ -108,6 +108,17 @@ vision:
 proof:
   shot_gap_min: 1              # minutes between the three blocker screenshots
 
+heartbeat:
+  # A URL that must be pinged regularly or an alarm fires SOMEWHERE ELSE.
+  # Make a free check at healthchecks.io, set the period to 15 minutes, and
+  # point its alert at the GUARDIAN's email -- not yours. Then the account that
+  # notices the system dying is not an account you control.
+  #
+  # This is the only part of the project that survives you owning the server,
+  # because the signal is the absence of a ping. There is nothing to switch off.
+  url: ""
+  every_sec: 300
+
 reminders:
   # A one-off thing you'd otherwise forget. Fires three times: the evening
   # before (while you're writing tomorrow's plan and could put it in), the

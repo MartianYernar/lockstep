@@ -7,6 +7,7 @@ buys you nothing because the server still knows.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiohttp import web
@@ -65,6 +66,37 @@ def build_app(cfg, engine, ledger) -> web.Application:
     app.router.add_get("/agent/state", state)
     app.router.add_post("/agent/ack", ack)
     return app
+
+
+async def heartbeat_loop(cfg, ledger) -> None:
+    """Ping an outside service on a schedule, so its silence is the alarm.
+
+    Everything else in this project can be switched off by whoever holds the
+    server. This cannot: the alerting lives somewhere else entirely, and the
+    signal is the ABSENCE of a ping. Deleting the box, revoking the token,
+    pulling the plug -- every one of those makes the monitor fire rather than
+    go quiet, because there is nothing to suppress. You cannot delete your way
+    out of a thing that reacts to deletion.
+
+    Point it at a free healthchecks.io or UptimeRobot check whose account
+    belongs to the guardian, not to you.
+    """
+    conf = cfg.raw.get("heartbeat", {})
+    url = conf.get("url")
+    if not url:
+        return
+    every = int(conf.get("every_sec", 300))
+    log.info("heartbeat -> %s every %ds", url.split("/")[2], every)
+    import aiohttp
+    while True:
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    if r.status >= 400:
+                        log.warning("heartbeat rejected: %s", r.status)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("heartbeat failed: %s", exc)
+        await asyncio.sleep(every)
 
 
 async def start(cfg, engine, ledger) -> web.AppRunner:

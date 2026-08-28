@@ -86,9 +86,15 @@ def main() -> None:
         site = web.TCPSite(runner, cfg.api["host"], int(cfg.api["port"]))
         await site.start()
         application.bot_data["api_runner"] = runner
+        from .api import heartbeat_loop
+        application.bot_data["heartbeat"] = asyncio.create_task(
+            heartbeat_loop(cfg, ledger))
         log.info("agent API on %s:%s", cfg.api["host"], cfg.api["port"])
 
     async def _post_shutdown(application) -> None:
+        task = application.bot_data.get("heartbeat")
+        if task:
+            task.cancel()
         runner = application.bot_data.get("api_runner")
         if runner:
             await runner.cleanup()
