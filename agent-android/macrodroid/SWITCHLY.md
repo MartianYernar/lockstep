@@ -51,16 +51,47 @@ A second macro, next to the siren one. Same trigger, same URL.
 
 **Actions:**
 1. **HTTP Request** → the same `/agent/state` URL → save to string `resp`
+   → **tick "Block next actions until complete"**
 2. **JSON Parse** → `resp` → dictionary `data`
-3. **If** `data[apps_blocked]` = true
-   - **Quick Settings Tile Toggle** → Switchly → **on**
-4. **Else**
-   - **Quick Settings Tile Toggle** → Switchly → **off**
+3. **If** `data[apps_blocked]` = true → *(see below — this is the unsolved part)*
 
-Add Switchly's tile to your quick settings drawer first, or MacroDroid won't
-find it. Gemini's Option A was the right call here — the tile is far more
-reliable than its Option B, which drives Switchly's UI by tapping text on
-screen and breaks the moment the app's layout changes.
+## The unsolved part: nothing can toggle Switchly remotely
+
+An earlier version of this file said to use MacroDroid's "Quick Settings Tile
+Toggle" on Switchly. **That does not exist.** MacroDroid's tile action configures
+*MacroDroid's own* tiles. Android has no API for one app to press another app's
+quick settings tile, so no automation tool can do it — not MacroDroid, not
+Tasker, not anything. Gemini suggested it and I passed it on without checking.
+
+What Switchly actually offers for control:
+
+| Method | Remote? | Notes |
+|---|---|---|
+| Schedules | n/a | Built in. Blocks on a timetable with no integration at all. |
+| NFC tag | ✗ | A physical key. Someone must be holding it. |
+| QR / barcode | **✓** | An image. Can be sent over Telegram. |
+| Quick tile | ✗ | Manual tap only. |
+| Password | ✓ | What you have now, and what keeps getting forgotten. |
+| UI automation | ✓ | MacroDroid taps through Switchly's screens. Needs an accessibility service, and breaks whenever Switchly changes its layout. |
+
+**The honest recommendation, in order:**
+
+1. **Use Switchly's own schedules.** Block during 16:00–22:20 automatically. No
+   integration, nothing to break, no extra permission. This covers the ordinary
+   case completely, and the ordinary case is almost all of it.
+2. **Give your father the QR unlock key.** Switchly accepts a QR code as an
+   unlock key. He keeps the image; when he agrees to open it he sends you the
+   photo. That is remote, needs no automation, and no password exists to forget.
+   Caveat worth knowing: you could save that image and reuse it, so it works
+   because you agreed it would, not because it's enforced.
+3. **UI automation only if 1 and 2 aren't enough.** It costs an accessibility
+   permission and it is brittle. Note this is a much lighter permission than the
+   device-admin that Kidslox held — it can be revoked and it cannot survive
+   uninstalling MacroDroid — but it is still the category of thing that broke
+   this phone before.
+
+The `apps_blocked` field is served by the API either way, so if a clean control
+path turns up later the server side is already done.
 
 ## Why there is no password anywhere in this
 
