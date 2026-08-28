@@ -60,6 +60,7 @@ class AgentState:
     alarm_volume_pct: int
     alarm_repeats: int          # how many times to sound off per poll
     poll_sec: int
+    apps_blocked: bool
     headline: str
     detail: str
 
@@ -72,6 +73,7 @@ class AgentState:
             "alarm_volume_pct": self.alarm_volume_pct,
             "alarm_repeats": self.alarm_repeats,
             "poll_sec": self.poll_sec,
+            "apps_blocked": self.apps_blocked,
             "headline": self.headline,
             "detail": self.detail,
         }
@@ -299,7 +301,8 @@ class Engine:
         e0 = self.cfg.esc
         idle = AgentState(False, 0, 0, False,
                           int(e0.get("phone_alarm_volume_pct", 55)), 0,
-                          int(e0.get("phone_poll_sec", 60)), "", "")
+                          int(e0.get("phone_poll_sec", 60)),
+                          self.apps_blocked(now), "", "")
 
         # A siren you can fire on demand. Testing the punishment otherwise means
         # waiting for the window to open and then deliberately ignoring a real
@@ -312,6 +315,7 @@ class Engine:
                 alarm_volume_pct=int(e0.get("phone_alarm_volume_pct", 55)),
                 alarm_repeats=int(e0.get("phone_repeats_base", 1)),
                 poll_sec=int(e0.get("phone_poll_sec", 60)),
+                apps_blocked=self.apps_blocked(now),
                 headline="TEST — this is what being behind sounds like",
                 detail=f"Test siren, {left}s left. Nothing is actually overdue.")
         if not lock["enabled"]:
@@ -359,6 +363,7 @@ class Engine:
             alarm_volume_pct=int(e.get("phone_alarm_volume_pct", 55)),
             alarm_repeats=int(repeats) if alarming else 0,
             poll_sec=int(e.get("phone_poll_sec", 60)),
+            apps_blocked=self.apps_blocked(now),
             headline=headline, detail=detail,
         )
 
@@ -466,6 +471,18 @@ class Engine:
                     actions.append(Action("plan_nag", {"date": tomorrow.isoformat()}))
 
         return actions
+
+    def apps_blocked(self, now: datetime) -> bool:
+        """Should the distraction blocker be ON right now?
+
+        Default: yes, always. The guardian can open a short window with a
+        command; it closes itself when the window expires. There is no password
+        anywhere in this path, so there is nothing to forget or re-set.
+        """
+        until = self.db.lock()["apps_open_until"]
+        if until and now < datetime.fromisoformat(until):
+            return False
+        return True
 
     def _phone_silence(self, now: datetime) -> float | None:
         """Minutes since the phone last polled, or None if it's fine.

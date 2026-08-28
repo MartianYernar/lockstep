@@ -108,6 +108,20 @@ vision:
 proof:
   shot_gap_min: 1              # minutes between the three blocker screenshots
 
+reminders:
+  # A one-off thing you'd otherwise forget. Fires three times: the evening
+  # before (while you're writing tomorrow's plan and could put it in), the
+  # morning of, and shortly before the thing itself.
+  evening_before_at: "20:00"
+  morning_at: "08:00"
+  soon_minutes: 60
+
+apps:
+  # Distraction blocker (Switchly) control, driven by the phone's existing poll.
+  # No second bot, no Telegram webhook -- see the note in agent-android/.
+  unlock_minutes: 10           # how long the guardian's /unblock opens it for
+  unlock_cooldown_days: 7      # and how rarely that may happen
+
 privacy:
   enforce: true                # reject photos that break the rules below
   no_faces: true               # any identifiable face, yours or anyone's

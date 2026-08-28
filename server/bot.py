@@ -12,7 +12,8 @@ from telegram.error import Forbidden
 from telegram.ext import (Application, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
-from . import images, planner
+from . import images, planner, reminders
+from .config import _hhmm
 from .lock import LockError
 
 log = logging.getLogger("bot")
@@ -145,6 +146,8 @@ class LockstepBot:
                 "/extend MONTHS — extend the commitment period\n"
                 "/stopbot reason — stop the system (only you can)\n"
                 "/startbot — turn it back on\n"
+                "/unblock 10 — open the app blocker briefly\n"
+                "/block — close it again\n"
                 "/report — today's numbers on demand\n"
                 "/status — system state",
                 parse_mode=ParseMode.HTML)
@@ -156,6 +159,8 @@ class LockstepBot:
             "/status — system state and days remaining\n"
             "/more 30 — the task you're on needs longer; takes time from later\n"
             "/replan — rewrite the rest of today; the end time stays fixed\n"
+            "/remind 3 sep 14:40 doctor — nags you the night before and that morning\n"
+            "/reminders — what's coming up · /forget N — drop one\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
@@ -351,6 +356,111 @@ class LockstepBot:
         await self.send_guardian(
             f"📝 Ansar rewrote the rest of today from "
             f"{minute//60:02d}:{minute%60:02d}. The day still ends at the same time.")
+
+    # ======================================================================
+    # reminders
+    # ======================================================================
+    async def cmd_remind(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        raw = update.message.text.partition(" ")[2].strip()
+        if not raw:
+            await update.message.reply_text(
+                "What and when?\n\n"
+                "<code>/remind 3 sep 14:40 doctor's appointment</code>\n"
+                "<code>/remind tomorrow 09:00 call mum</code>\n\n"
+                "I'll nag you the evening before, the morning of, and an hour "
+                "before it.", parse_mode=ParseMode.HTML)
+            return
+        now = self.cfg.now()
+        try:
+            got = reminders.parse(raw, now)
+        except reminders.ParseError as exc:
+            await update.message.reply_text(f"❌ {exc}", parse_mode=ParseMode.HTML)
+            return
+        cur = self.db.run(
+            "INSERT INTO reminders (at_ts, text, created_at) VALUES (?, ?, ?)",
+            (got.when.isoformat(), got.text, now.isoformat()))
+        self.ledger.append("reminder_set", {"at": got.when.isoformat(), "text": got.text})
+        await update.message.reply_text(
+            f"🔔 <b>{html.escape(got.text)}</b>\n{got.when:%A %d %B, %H:%M}\n\n"
+            f"I'll remind you the evening before, that morning, and an hour ahead.\n"
+            f"<code>/forget {cur.lastrowid}</code> to drop it.",
+            parse_mode=ParseMode.HTML)
+
+    async def cmd_reminders(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        now = self.cfg.now()
+        rows = self.db.q("SELECT * FROM reminders WHERE at_ts >= ? ORDER BY at_ts",
+                         (now.isoformat(),))
+        if not rows:
+            await update.message.reply_text("Nothing coming up.")
+            return
+        lines = []
+        for r in rows:
+            when = datetime.fromisoformat(r["at_ts"])
+            days = (when.date() - now.date()).days
+            near = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+            lines.append(f"<code>{r['id']:>3}</code>  {when:%a %d %b %H:%M} "
+                         f"({near})\n     {html.escape(r['text'])}")
+        await update.message.reply_text("🔔 <b>Coming up</b>\n\n" + "\n".join(lines),
+                                        parse_mode=ParseMode.HTML)
+
+    async def cmd_forget(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        parts = update.message.text.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await update.message.reply_text("Which one? /reminders shows the numbers.")
+            return
+        row = self.db.one("SELECT text FROM reminders WHERE id = ?", (int(parts[1]),))
+        if not row:
+            await update.message.reply_text("No reminder with that number.")
+            return
+        self.db.run("DELETE FROM reminders WHERE id = ?", (int(parts[1]),))
+        await update.message.reply_text(f"Dropped: {html.escape(row['text'])}",
+                                        parse_mode=ParseMode.HTML)
+
+    # ======================================================================
+    # distraction blocker
+    # ======================================================================
+    async def cmd_unblock(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_guardian(update):
+            await update.message.reply_text(
+                "Only your father can open this, from his own Telegram.")
+            return
+        now = self.cfg.now()
+        conf = self.cfg.raw.get("apps", {})
+        cooldown = int(conf.get("unlock_cooldown_days", 7))
+        last = self.db.lock()["apps_opened_at"]
+        if last and (now - datetime.fromisoformat(last)).days < cooldown:
+            nxt = datetime.fromisoformat(last) + timedelta(days=cooldown)
+            await update.message.reply_text(
+                f"Last opened {datetime.fromisoformat(last):%d %b}. Next available "
+                f"{nxt:%d %b}. He set that limit himself.")
+            return
+        parts = update.message.text.split()
+        mins = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() \
+            else int(conf.get("unlock_minutes", 10))
+        mins = max(1, min(mins, 60))
+        until = now + timedelta(minutes=mins)
+        self.db.set_lock(apps_open_until=until.isoformat(), apps_opened_at=now.isoformat())
+        self.ledger.append("apps_unlocked", {"minutes": mins, "until": until.isoformat()})
+        await update.message.reply_text(
+            f"🔓 Apps open for {mins} min, until {until:%H:%M}. Closes by itself.")
+        await self.send_user(
+            f"🔓 Your father opened the blocker for <b>{mins} minutes</b>, "
+            f"until {until:%H:%M}. It shuts by itself.\n\n"
+            "You wrote the warning about this yourself: ten minutes is enough to "
+            "install something you'll regret. Do the thing you asked for.")
+
+    async def cmd_block(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_guardian(update):
+            await update.message.reply_text("Only your father can do that.")
+            return
+        self.db.set_lock(apps_open_until=None)
+        self.ledger.append("apps_relocked", {})
+        await update.message.reply_text("🔒 Closed again.")
+        await self.send_user("🔒 Blocker closed again by your father.")
 
     async def cmd_today(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
@@ -898,6 +1008,11 @@ class LockstepBot:
             except Exception as exc:                          # noqa: BLE001
                 log.exception("action %s failed: %s", act.kind, exc)
 
+        try:
+            await self._fire_reminders(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.exception("reminders failed: %s", exc)
+
         # Tell them when the pressure steps up, not on every single tick.
         st = self.engine.agent_state(now)
         if st.active and st.level > self.last_level:
@@ -940,6 +1055,30 @@ class LockstepBot:
                 "checkpoint_id": misses[-1].payload["checkpoint_id"],
             }))
         return out
+
+    async def _fire_reminders(self, now: datetime) -> None:
+        conf = self.cfg.raw.get("reminders", {})
+        eve = _hhmm(conf.get("evening_before_at", "20:00"))
+        morn = _hhmm(conf.get("morning_at", "08:00"))
+        soon = int(conf.get("soon_minutes", 60))
+        wording = {
+            "eve": "🔔 <b>Tomorrow</b> — {when:%H:%M}\n{text}\n\nWorth putting in "
+                   "tonight's plan.",
+            "morn": "🔔 <b>Today</b> at {when:%H:%M}\n{text}",
+            "soon": "🔔 <b>In under an hour</b> — {when:%H:%M}\n{text}",
+        }
+        for r in self.db.q("SELECT * FROM reminders WHERE at_ts >= ?",
+                           ((now - timedelta(hours=2)).isoformat(),)):
+            when = datetime.fromisoformat(r["at_ts"])
+            fired = set(filter(None, (r["fired"] or "").split(",")))
+            stage, settled = reminders.due_stages(when, now, fired, eve, morn, soon)
+            if settled - fired:
+                self.db.run("UPDATE reminders SET fired = ? WHERE id = ?",
+                            (",".join(sorted(fired | settled)), r["id"]))
+            if not stage:
+                continue
+            await self.send_user(
+                wording[stage].format(when=when, text=html.escape(r["text"])))
 
     async def _dispatch(self, act, now: datetime) -> None:
         p = act.payload
@@ -1070,6 +1209,9 @@ class LockstepBot:
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
             ("more", self.cmd_more), ("replan", self.cmd_replan),
             ("stopbot", self.cmd_stopbot), ("startbot", self.cmd_startbot),
+            ("remind", self.cmd_remind), ("reminders", self.cmd_reminders),
+            ("forget", self.cmd_forget),
+            ("unblock", self.cmd_unblock), ("block", self.cmd_block),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS lock_state (
     guardian_chat_id  INTEGER,
     blocked_since     TEXT,
     siren_test_until  TEXT,
-    muted_until       TEXT
+    muted_until       TEXT,
+    apps_open_until   TEXT,
+    apps_opened_at    TEXT
 );
 
 -- "Has this already happened?" for things that must fire exactly once.
@@ -94,6 +96,8 @@ class Database:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        from .reminders import SCHEMA as REMINDER_SCHEMA
+        self.conn.executescript(REMINDER_SCHEMA)
         self._migrate()
         self.conn.execute("INSERT OR IGNORE INTO lock_state (id) VALUES (1)")
         self.conn.commit()
@@ -111,7 +115,8 @@ class Database:
         for col, decl in (("last_tick_at", "TEXT"), ("last_agent_poll", "TEXT"),
                           ("guardian_chat_id", "INTEGER"), ("blocked_since", "TEXT"),
                           ("siren_test_until", "TEXT"),
-                          ("muted_until", "TEXT")):
+                          ("muted_until", "TEXT"),
+                          ("apps_open_until", "TEXT"), ("apps_opened_at", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE lock_state ADD COLUMN {col} {decl}")
         self.conn.commit()
