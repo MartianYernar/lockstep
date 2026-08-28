@@ -1,32 +1,27 @@
 """The two-party lock.
 
-What this actually guarantees, stated plainly:
+There is deliberately no password anywhere in this file.
 
-  * The password is chosen by your father in his own Telegram chat. You never
-    see it, and only a bcrypt hash is stored, so reading the database gives you
-    nothing usable.
-  * Every disable attempt -- successful, failed, or merely started -- is pushed
-    to his Telegram before anything happens. Turning the system off is not a
-    private act.
-  * Before the commitment date, the correct password alone is not enough: he
-    must also see your written reason, because that is the part that costs you
-    something.
+A password is a secret, and secrets fail in exactly the ways this project has
+already been bitten by: forgotten, lost with a phone, written down somewhere
+unhelpful, or talked out of someone at eleven at night. The App Lock on the
+phone is still shut for precisely that reason.
 
-What it does NOT guarantee: you have root on the box. You can always `rm` the
-database. The design answer to that is not a stronger lock, it's that the
-wreckage is obvious -- the ledger chain breaks, the daily heartbeat stops, and
-he notices. See ledger.py.
+What replaces it is an address. The system does what one Telegram account tells
+it to and ignores everyone else. An account cannot be forgotten, cannot be
+reset by guessing a childhood pet, and cannot be typed by someone who isn't
+holding that phone.
+
+What this does NOT guarantee: you have root on the box, and you can always `rm`
+the database. The answer to that is not a stronger lock -- it's that the wreckage
+is loud. The ledger chain breaks, the nightly report stops, and the external
+heartbeat fires at an address you don't control. See ledger.py and
+docs/THREAT-MODEL.md.
 """
 from __future__ import annotations
 
 import secrets
 from datetime import date, datetime, timedelta
-
-import bcrypt
-
-MAX_ATTEMPTS = 3
-LOCKOUT_MINUTES = 30
-
 
 class LockError(Exception):
     """Message is safe to show the user verbatim."""
@@ -37,15 +32,10 @@ class Lock:
         self.cfg = cfg
         self.db = db
         self.ledger = ledger
-        self._setup_token: str | None = None
 
+    # -- who holds the switch ---------------------------------------------
     def guardian_id(self) -> int:
-        """Whoever is registered, falling back to the config file.
-
-        Runtime registration exists because the config route needs you to know
-        a Telegram numeric id before anyone has messaged the bot, which is a
-        chicken-and-egg problem people get stuck on.
-        """
+        """Whoever is registered, falling back to the config file."""
         row = self.db.lock()
         return int(row["guardian_chat_id"] or self.cfg.guardian_chat_id or 0)
 
@@ -53,84 +43,25 @@ class Lock:
         self.db.set_lock(guardian_chat_id=int(chat_id))
         self.ledger.append("guardian_registered", {"chat_id": int(chat_id)})
 
-    # -- guardian enrolment ----------------------------------------------------
     @property
     def is_configured(self) -> bool:
-        return bool(self.db.lock()["guardian_hash"])
+        return bool(self.guardian_id())
 
-    def new_setup_token(self) -> str:
-        self._setup_token = secrets.token_hex(4).upper()
-        return self._setup_token
+    # -- the commitment ----------------------------------------------------
+    def start_commitment(self, months: int, today: date) -> date:
+        end = _add_months(today, months)
+        self.db.set_lock(commitment_end=end.isoformat(), enabled=1, paused_until=None)
+        self.ledger.append("commitment_started", {"months": months, "until": end.isoformat()})
+        return end
 
-    def complete_setup(self, token: str, password: str, from_chat_id: int) -> None:
-        if self.is_configured:
-            raise LockError("A guardian password is already set. Use /guardian_change.")
-        if from_chat_id != self.guardian_id():
-            raise LockError("Only the guardian's own Telegram account can set the password.")
-        if not self._setup_token or not secrets.compare_digest(token.upper(), self._setup_token):
-            raise LockError("That setup code is wrong or expired. Restart the bot for a new one.")
-        if len(password) < 8:
-            raise LockError("Use at least 8 characters.")
-        self._store(password)
-        self._setup_token = None
-        self.ledger.append("guardian_enrolled", {"chat_id": from_chat_id})
-
-    def change_password(self, old: str, new: str, from_chat_id: int) -> None:
-        if from_chat_id != self.guardian_id():
-            raise LockError("Only the guardian can change the password.")
-        if not self._matches(old):
-            raise LockError("Current password is wrong.")
-        if len(new) < 8:
-            raise LockError("Use at least 8 characters.")
-        self._store(new)
-        self.ledger.append("guardian_password_changed", {})
-
-    def _store(self, password: str) -> None:
-        digest = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        end = self.cfg.commitment_end()
-        self.db.set_lock(
-            guardian_hash=digest,
-            guardian_set_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            failed_attempts=0,
-            commitment_end=end.isoformat() if end else None,
-        )
-
-    def _matches(self, password: str) -> bool:
+    def extend_commitment(self, months: int, today: date) -> date:
         row = self.db.lock()
-        if not row["guardian_hash"]:
-            return False
-        try:
-            return bcrypt.checkpw(password.encode(), row["guardian_hash"].encode())
-        except ValueError:
-            return False
+        base = max(today, date.fromisoformat(row["commitment_end"] or today.isoformat()))
+        end = _add_months(base, months)
+        self.db.set_lock(commitment_end=end.isoformat(), enabled=1, paused_until=None)
+        self.ledger.append("commitment_extended", {"months": months, "until": end.isoformat()})
+        return end
 
-    # -- brute-force damping ---------------------------------------------------
-    def _lockout_remaining(self, now: datetime) -> int:
-        row = self.db.lock()
-        if row["failed_attempts"] < MAX_ATTEMPTS or not row["last_attempt_at"]:
-            return 0
-        until = datetime.fromisoformat(row["last_attempt_at"]) + timedelta(minutes=LOCKOUT_MINUTES)
-        return max(0, int((until - now).total_seconds() // 60))
-
-    def verify(self, password: str, now: datetime) -> bool:
-        """Check the password, recording the attempt either way."""
-        remaining = self._lockout_remaining(now)
-        if remaining:
-            # Log it too. Someone hammering during a lockout is precisely the
-            # pattern the guardian should be able to see afterwards.
-            self.ledger.append("password_attempt", {"ok": False, "blocked": True})
-            raise LockError(f"Too many wrong attempts. Locked for another {remaining} min.")
-
-        ok = self._matches(password)
-        row = self.db.lock()
-        self.db.set_lock(
-            failed_attempts=0 if ok else row["failed_attempts"] + 1,
-            last_attempt_at=now.isoformat(),
-        )
-        self.ledger.append("password_attempt", {"ok": ok})
-        return ok
-
-    # -- commitment ------------------------------------------------------------
     def commitment_active(self, today: date) -> bool:
         row = self.db.lock()
         if not row["commitment_end"]:
@@ -143,7 +74,7 @@ class Lock:
             return 0
         return max(0, (date.fromisoformat(row["commitment_end"]) - today).days)
 
-    # -- state changes ---------------------------------------------------------
+    # -- state changes -----------------------------------------------------
     def disable(self, reason: str, now: datetime) -> None:
         self.db.set_lock(enabled=0)
         self.ledger.append("system_disabled", {"reason": reason, "at": now.isoformat()})
@@ -156,17 +87,14 @@ class Lock:
         self.db.set_lock(paused_until=until.isoformat())
         self.ledger.append("system_paused", {"until": until.isoformat(), "reason": reason})
 
-    def extend_commitment(self, months: int, today: date) -> date:
-        base = max(today, date.fromisoformat(self.db.lock()["commitment_end"] or today.isoformat()))
-        year = base.year + (base.month - 1 + months) // 12
-        month = (base.month - 1 + months) % 12 + 1
-        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-        last = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
-        end = date(year, month, min(base.day, last))
-        self.db.set_lock(commitment_end=end.isoformat(), enabled=1, paused_until=None)
-        self.ledger.append("commitment_extended", {"months": months, "until": end.isoformat()})
-        return end
-
     @property
     def enabled(self) -> bool:
         return bool(self.db.lock()["enabled"])
+
+
+def _add_months(base: date, months: int) -> date:
+    year = base.year + (base.month - 1 + months) // 12
+    month = (base.month - 1 + months) % 12 + 1
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    last = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return date(year, month, min(base.day, last))

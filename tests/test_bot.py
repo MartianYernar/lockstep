@@ -191,7 +191,7 @@ cfg, db, led, eng, lk, bot, val = make()
 u = FakeUpdate("/status")
 run(bot.cmd_status(u, None))
 check("status produced", len(u.message.last) > 40, True)
-check("mentions the guardian password state", "Guardian password" in u.message.last, True)
+check("names who holds the switch", "Guardian: registered" in u.message.last, True)
 check("reports the log integrity", "Log:" in u.message.last, True)
 print("      ", u.message.last.replace("\n", "\n       "))
 
@@ -244,30 +244,32 @@ sent = bot.app.bot.to(USER)
 check("user is told, with the chat id", any(str(DAD) in t for t in sent), True)
 check("user is told the exact command", any("/setguardian" in t for t in sent), True)
 
-print("\n=== /setguardian registers them and sends the setup code ===")
+print("\n=== /setguardian registers them, before any commitment ===")
+db.set_lock(commitment_end=None)          # you can only do this before it starts
 u2 = FakeUpdate(f"/setguardian {DAD}")
 run(bot.cmd_setguardian(u2, None))
 check("registered", lk.guardian_id(), DAD)
 check("confirmed to user", any("Guardian registered" in r for r in u2.message.replies), True)
 dad_msgs = bot.app.bot.to(DAD)
-check("setup code went to him, not to you", any("/guardian " in t for t in dad_msgs), True)
-check("the code never appears in your chat",
-      any("/guardian " in t for t in bot.app.bot.to(USER)), False)
+check("he is told what to send, and you are not", any("/commit 3" in t for t in dad_msgs), True)
+check("you are only told he was asked",
+      any("asked to send /commit" in r for r in u2.message.replies), True)
 
 print("\n=== you cannot make yourself the guardian ===")
 cfg, db, led, eng, lk, bot, val = make()
 bot.cfg.raw["telegram"]["guardian_chat_id"] = 0
+db.set_lock(commitment_end=None)
 u3 = FakeUpdate(f"/setguardian {USER}")
 run(bot.cmd_setguardian(u3, None))
 check("refused", "has to be someone else" in u3.message.last, True)
 check("nobody registered", lk.guardian_id(), 0)
 
-print("\n=== once a password is set, the guardian can't be swapped ===")
+print("\n=== once the commitment starts, the guardian can't be swapped ===")
 lk.register_guardian(DAD)
-lk._setup_token = "Z"; lk.complete_setup("Z", "fatherpassword", DAD)
+lk.start_commitment(3, cfg.today())
 u4 = FakeUpdate("/setguardian 12345")
 run(bot.cmd_setguardian(u4, None))
-check("swap refused", "already set" in u4.message.last, True)
+check("swap refused mid-commitment", "halfway through" in u4.message.last, True)
 check("still the original guardian", lk.guardian_id(), DAD)
 
 print("\n=== blocking the bot cannot be a quiet exit ===")

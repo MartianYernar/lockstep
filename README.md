@@ -86,9 +86,15 @@ photo of wherever you actually are. Once. One hour.
 your reason reaches your father word for word — but only his `/stopbot`, from his
 own Telegram, actually stops it. Only his `/startbot` turns it back on.
 
-There is deliberately **no password**. A password can be forgotten, lost with a
-phone, or talked out of someone at 11pm. This project already lost one that way.
-A command that only arrives from one account cannot be forgotten or reset.
+There is deliberately **no password anywhere in the project.** A password is a
+secret, and secrets fail in the ways this project has already been bitten by:
+forgotten, lost with a phone, or talked out of someone at 11pm. The App Lock on
+the phone is still shut for exactly that reason.
+
+What replaces it is an *address*. The system does what one Telegram account
+tells it and ignores everyone else. An account cannot be forgotten, cannot be
+reset by guessing a childhood pet, and cannot be typed by someone who isn't
+holding that phone.
 
 ---
 

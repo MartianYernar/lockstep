@@ -123,14 +123,14 @@ class LockstepBot:
     # user commands
     # ======================================================================
     async def cmd_start(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        if self._is_guardian(update) and not self.lock.is_configured:
+        if self._is_guardian(update) and not self.lock.commitment_active(self.cfg.today()):
             await update.message.reply_text(
-                "You are set as the guardian for this system.\n\n"
-                "Ansar cannot turn it off without a password that only you know. "
-                "To set it, send:\n\n"
-                "<code>/guardian CODE your-password-here</code>\n\n"
-                "where CODE is the setup code printed in the server log. "
-                "Choose something he will not guess, and keep it in your notes app.",
+                "You are the guardian for Ansar's accountability system.\n\n"
+                "There is no password to set — the system simply does what this "
+                "Telegram account tells it and ignores everyone else, including him.\n\n"
+                "To start it, send:\n\n<code>/commit 3</code>\n\n"
+                "for three months. After that it stops by itself and asks whether "
+                "to continue.",
                 parse_mode=ParseMode.HTML)
             return
         await self.cmd_status(update, _ctx)
@@ -139,8 +139,7 @@ class LockstepBot:
         if self._is_guardian(update):
             await update.message.reply_text(
                 "<b>Guardian commands</b>\n"
-                "/guardian CODE PASSWORD — set the password (first time only)\n"
-                "/guardian_change OLD NEW — change it\n"
+                "/commit 3 — start the three-month commitment\n"
                 "/pause HOURS reason — grant a pause (illness, travel)\n"
                 "/resume — end a pause early\n"
                 "/extend MONTHS — extend the commitment period\n"
@@ -191,7 +190,7 @@ class LockstepBot:
                if self.cfg.mode == "spot_check"
                else f"every {self.cfg.interval_min} min")
             + f" · {self.cfg.grace_min} min grace",
-            f"Guardian password: {'set' if self.lock.is_configured else '⚠️ NOT SET'}",
+            f"Guardian: {'registered' if self.lock.is_configured else '⚠️ NOT SET'}",
             (f"Commitment: {self.lock.days_remaining(today)} days left "
              f"(until {row['commitment_end']})") if row["commitment_end"]
             else "Commitment: none — trial mode, you can stop any time",
@@ -624,23 +623,20 @@ class LockstepBot:
         if gid == self.cfg.user_chat_id:
             await update.message.reply_text("That's you. The guardian has to be someone else.")
             return
-        if self.lock.is_configured:
+        if self.lock.commitment_active(self.cfg.today()):
             await update.message.reply_text(
-                "A guardian password is already set — the guardian can't be swapped "
-                "without it. That's the point of it.")
+                "The commitment is running. You don't get to change who holds the "
+                "switch halfway through — that's the point of it.")
             return
         self.lock.register_guardian(gid)
         await update.message.reply_text(f"✅ Guardian registered: <code>{gid}</code>",
                                         parse_mode=ParseMode.HTML)
-        token = self.lock.new_setup_token()
         await self.send_guardian(
-            "You've been set as the guardian for Ansar's accountability system.\n\n"
-            "He cannot switch it off without a password only you know. To set it, "
-            f"send me:\n\n<code>/guardian {token} your-chosen-password</code>\n\n"
-            "Pick something he won't guess and keep it in your notes app. "
-            "I'll delete your message as soon as I've read it.")
-        await update.message.reply_text(
-            "I've messaged him the setup code directly — you never see it.")
+            "You are the guardian for Ansar's accountability system.\n\n"
+            "There is no password to set. The system does what this Telegram "
+            "account tells it and ignores everyone else, him included.\n\n"
+            "To start it, send:\n\n<code>/commit 3</code>\n\nfor three months.")
+        await update.message.reply_text("He's been asked to send /commit 3.")
 
     async def cmd_testsiren(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -775,43 +771,38 @@ class LockstepBot:
     # ======================================================================
     # guardian commands
     # ======================================================================
-    async def cmd_guardian(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        parts = update.message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await update.message.reply_text("Use: /guardian CODE password")
+    async def cmd_commit(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """The guardian starts the clock. One command, no code, no password."""
+        if not self._is_guardian(update):
+            await update.message.reply_text(
+                "Only the guardian can start the commitment.")
             return
-        try:
-            self.lock.complete_setup(parts[1], parts[2], update.effective_chat.id)
-        except LockError as exc:
-            await update.message.reply_text(f"❌ {exc}")
+        parts = update.message.text.split()
+        months = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
+        months = max(1, min(months, 24))
+        today = self.cfg.now().date()
+        if self.lock.commitment_active(today):
+            await update.message.reply_text(
+                f"Already running until {self.db.lock()['commitment_end']}. "
+                f"Use /extend {months} to add more.")
             return
-        try:
-            await update.message.delete()
-        except Exception:                                     # noqa: BLE001
-            pass
+        end = self.lock.start_commitment(months, today)
         await update.message.reply_text(
-            "✅ Password set. Write it in your notes app now — it cannot be recovered.\n\n"
-            f"Ansar cannot switch this off before "
-            f"<b>{self.db.lock()['commitment_end']}</b> without it. "
-            "You'll get a short report every night, and a message the moment he asks to stop.",
+            f"✅ Commitment started — runs to <b>{end}</b>.\n\n"
+            "From now until then:\n"
+            "• only you can stop it, with <code>/stopbot</code>\n"
+            "• he cannot, by any route, and there is no password to lose\n"
+            "• you'll get a short report each night\n"
+            "• <code>/pause 24 reason</code> if he's genuinely ill or travelling\n\n"
+            "If he asks you to stop it, you don't have to reply. Doing nothing "
+            "is a valid answer and he knows that.",
             parse_mode=ParseMode.HTML)
-        await self.send_user("✅ Guardian password is set. The lock is live.")
-
-    async def cmd_guardian_change(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        parts = update.message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await update.message.reply_text("Use: /guardian_change OLD NEW")
-            return
-        try:
-            self.lock.change_password(parts[1], parts[2], update.effective_chat.id)
-        except LockError as exc:
-            await update.message.reply_text(f"❌ {exc}")
-            return
-        try:
-            await update.message.delete()
-        except Exception:                                     # noqa: BLE001
-            pass
-        await update.message.reply_text("✅ Password changed.")
+        await self.send_user(
+            f"🔒 <b>Your father started the commitment. It runs to {end}.</b>\n\n"
+            "You can't stop it. Only he can, and only he can restart it. "
+            "There's no password anywhere — nothing to find, forget or talk him out of.\n\n"
+            "This is the version of you that wanted this, holding the door for the "
+            "version that won't.")
 
     async def cmd_pause(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
@@ -1203,7 +1194,7 @@ class LockstepBot:
             ("start", self.cmd_start), ("help", self.cmd_help), ("status", self.cmd_status),
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
-            ("cancel", self.cmd_cancel), ("guardian", self.cmd_guardian),
+            ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),
             ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
@@ -1212,7 +1203,7 @@ class LockstepBot:
             ("remind", self.cmd_remind), ("reminders", self.cmd_reminders),
             ("forget", self.cmd_forget),
             ("unblock", self.cmd_unblock), ("block", self.cmd_block),
-            ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
+            ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:
             app.add_handler(CommandHandler(name, fn))

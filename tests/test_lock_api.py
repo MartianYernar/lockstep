@@ -14,54 +14,33 @@ cfg, db, led, eng, lk = build()
 TZ = ZoneInfo("Asia/Almaty")
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=TZ)
 
-print("\n=== guardian enrolment ===")
-check("starts unconfigured", lk.is_configured, False)
-tok = lk.new_setup_token()
+print("\n=== who holds the switch — an address, not a secret ===")
+cfg.raw["telegram"]["guardian_chat_id"] = 0     # nothing configured yet
+check("nobody registered at first", lk.guardian_id(), 0)
+check("...so nothing is holding it shut", lk.is_configured, False)
 
-try:
-    lk.complete_setup(tok, "correcthorse", from_chat_id=1)     # the USER's chat id
-    check("user cannot enrol themselves", "no error", "LockError")
-except LockError as e:
-    check("user cannot enrol themselves", "rejected", "rejected")
+lk.register_guardian(2)
+check("guardian registered", lk.guardian_id(), 2)
+check("configured", lk.is_configured, True)
+check("no password stored anywhere",
+      any("password" in str(v).lower() or "hash" in str(k).lower()
+          for k, v in dict(db.lock()).items() if v), False)
 
-try:
-    lk.complete_setup("BADCODE", "correcthorse", from_chat_id=2)
-    check("wrong setup code rejected", "no error", "LockError")
-except LockError:
-    check("wrong setup code rejected", "rejected", "rejected")
+print("\n=== the commitment is one command, no code and no secret ===")
+end_date = lk.start_commitment(3, date(2026, 8, 25))
+check("runs three months out", end_date.isoformat(), "2026-11-25")
+check("active during", lk.commitment_active(date(2026, 9, 1)), True)
+check("over after", lk.commitment_active(date(2026, 12, 1)), False)
+check("days remaining", lk.days_remaining(date(2026, 8, 25)), 92)
+check("recorded", "commitment_started" in [r["kind"] for r in db.q("SELECT kind FROM events")], True)
+check("extend pushes it out",
+      lk.extend_commitment(3, date(2026, 8, 25)).isoformat(), "2027-02-25")
 
-try:
-    lk.complete_setup(tok, "short", from_chat_id=2)
-    check("short password rejected", "no error", "LockError")
-except LockError:
-    check("short password rejected", "rejected", "rejected")
-
-lk.complete_setup(tok, "correcthorsebattery", from_chat_id=2)
-check("guardian enrolled", lk.is_configured, True)
-check("password not stored in clear",
-      "correcthorsebattery" in json.dumps(dict(db.lock())), False)
-check("hash is bcrypt", db.lock()["guardian_hash"].startswith("$2b$"), True)
-
-try:
-    lk.complete_setup(lk.new_setup_token(), "another", from_chat_id=2)
-    check("cannot re-enrol once set", "no error", "LockError")
-except LockError:
-    check("cannot re-enrol once set", "rejected", "rejected")
-
-print("\n=== password verification and lockout ===")
-check("correct password", lk.verify("correcthorsebattery", NOW), True)
-check("wrong password", lk.verify("nope", NOW), False)
-check("wrong password 2", lk.verify("nope2", NOW), False)
-check("wrong password 3", lk.verify("nope3", NOW), False)
-try:
-    lk.verify("correcthorsebattery", NOW)
-    check("locked out after 3 fails", "no error", "LockError")
-except LockError as e:
-    check("locked out after 3 fails", "rejected", "rejected")
-    print(f"        message: {e}")
-later = NOW + timedelta(minutes=31)
-check("lockout expires after 30 min", lk.verify("correcthorsebattery", later), True)
-check("counter reset on success", db.lock()["failed_attempts"], 0)
+print("\n=== nothing survives a restart that could go stale ===")
+# The old design mailed a fresh setup code on every restart, which invalidated
+# the one already sitting in the guardian's inbox. There is no code any more.
+check("no setup token concept at all", hasattr(lk, "new_setup_token"), False)
+check("no password verification either", hasattr(lk, "verify"), False)
 
 print("\n=== months: 0 means no lock, not an expired one ===")
 import copy
@@ -69,29 +48,22 @@ from fixtures import RAW
 trial = copy.deepcopy(RAW); trial["commitment"]["months"] = 0
 tcfg, tdb, tled, teng, tlk = build(trial)
 check("no commitment end computed", tcfg.commitment_end(), None)
-tlk._setup_token = "T"; tlk.complete_setup("T", "trialpassword", 2)
-check("nothing stamped in the db", tdb.lock()["commitment_end"], None)
+tlk.register_guardian(2)
+check("registering a guardian does not start the clock", tdb.lock()["commitment_end"], None)
 check("commitment not active", tlk.commitment_active(date(2026, 8, 25)), False)
 from datetime import datetime as _dt
 from zoneinfo import ZoneInfo as _Z
 kinds0 = [a.kind for a in teng.tick(_dt(2026, 8, 25, 12, 0, tzinfo=_Z("Asia/Almaty")))]
 check("no bogus 'commitment over' message", "commitment_over" in kinds0, False)
 
-print("\n=== commitment window ===")
-check("commitment end recorded", db.lock()["commitment_end"], "2026-11-25")
-check("active during period", lk.commitment_active(date(2026, 9, 1)), True)
-check("over after period", lk.commitment_active(date(2026, 12, 1)), False)
-check("days remaining", lk.days_remaining(date(2026, 8, 25)), 92)
-check("extend pushes it out", lk.extend_commitment(3, date(2026, 8, 25)).isoformat(), "2027-02-25")
-
 print("\n=== disable is recorded ===")
 lk.disable("had to travel for a family thing", NOW)
 check("disabled", lk.enabled, False)
 kinds = [r["kind"] for r in db.q("SELECT kind FROM events ORDER BY id")]
 check("system_disabled in ledger", "system_disabled" in kinds, True)
-check("all 6 attempts logged, lockout included", kinds.count("password_attempt"), 6)
+
 lk.enable(NOW)
-check("re-enable needs no password", lk.enabled, True)
+check("re-enable is a plain state change", lk.enabled, True)
 check("ledger still verifies", led.verify(), (True, None))
 
 print("\n=== agent API ===")

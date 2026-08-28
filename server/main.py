@@ -37,46 +37,30 @@ def main() -> None:
         log.error("LEDGER BROKEN at event %s — history was rewritten.", bad)
 
     if not lock.is_configured:
-        token = lock.new_setup_token()
-        banner = (
-            "\n" + "=" * 62 +
-            "\n  NO GUARDIAN PASSWORD SET — the lock is not live yet."
-            f"\n\n  Have your father send this to the bot, from his own Telegram:"
-            f"\n\n      /guardian {token} his-chosen-password"
-            "\n\n  The code dies when this process restarts."
-            "\n" + "=" * 62 + "\n"
-        )
-        log.warning(banner)
+        log.warning("NO GUARDIAN REGISTERED — nothing is holding this shut. "
+                    "Have them message the bot, then send /setguardian <id>.")
 
-    if not lock.db.lock()["commitment_end"]:
-        end = cfg.commitment_end()
-        if end:
-            db.set_lock(commitment_end=end.isoformat())
-    log.info("commitment: %s", db.lock()["commitment_end"] or "none set (trial mode)")
+    log.info("commitment: %s",
+             db.lock()["commitment_end"] or "not started — guardian sends /commit 3")
 
     app = bot.build()
 
     # The agent API shares the bot's event loop, so there is one process to run,
     # one process to supervise, and one thing that can be down.
     async def _post_init(application) -> None:
-        # Close the enrolment loop automatically: if we know who the guardian is
-        # but they have not set a password, send them the code directly. It never
-        # passes through the user's chat.
-        if not lock.is_configured and lock.guardian_id():
-            code = lock.new_setup_token()
+        # Nudge the guardian once per start, but never with a code that a
+        # restart would invalidate. An earlier version mailed a fresh setup code
+        # on every restart, which meant the code in their inbox was usually the
+        # wrong one — the guardian was told their correct input was invalid.
+        if lock.guardian_id() and not lock.commitment_active(cfg.today()):
             try:
                 await application.bot.send_message(
                     lock.guardian_id(),
-                    "You are the guardian for Ansar's accountability system.\n\n"
-                    "He cannot switch it off before the agreed date without a password "
-                    "only you know. To set it, reply with:\n\n"
-                    f"<code>/guardian {code} your-chosen-password</code>\n\n"
-                    "Choose something he will not guess, write it in your notes app, "
-                    "and I will delete your message the moment I have read it.\n\n"
-                    "You will get one short report each evening, and a message the "
-                    "instant he asks to stop.",
+                    "Reminder: Ansar's accountability system is set up and waiting "
+                    "on you.\n\nThere is no password to choose. Send "
+                    "<code>/commit 3</code> to start it for three months.\n\n"
+                    "From then only you can stop it, with <code>/stopbot</code>.",
                     parse_mode="HTML")
-                log.info("sent setup code to guardian %s", lock.guardian_id())
             except Exception as exc:                          # noqa: BLE001
                 log.error("could not reach guardian: %s", exc)
 

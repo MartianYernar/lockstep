@@ -71,24 +71,25 @@ cd deploy && docker compose up -d && docker compose logs -f
 
 The log prints a **setup code**. Leave it on screen for the next step.
 
-## 5. Enrol your father — 5 min
+## 5. Enrol your father — 2 min
 
-Show him [docs/GUARDIAN.md](docs/GUARDIAN.md) first, so he knows what he's
-agreeing to. Then, **from his own phone**, he sends the bot:
+Show him [docs/GUARDIAN.md](docs/GUARDIAN.md) first so he knows what he's agreeing to.
 
-```
-/guardian <SETUP_CODE> <a-password-you-will-never-guess>
-```
+1. He sends the bot **any message**
+2. You get a `/setguardian <id>` command to copy — send it
+3. He sends **`/commit 3`**
 
-The bot deletes the message immediately and tells him to write the password in
-his notes app. Only a bcrypt hash is stored — it cannot be recovered, by him or
-by you.
+That's it. No password, no setup code, nothing to write down or lose.
 
-Check it took: `/status` should say `Guardian password: set`.
+From then on only his `/stopbot` stops the system and only his `/startbot`
+restarts it. Your `/disable` merely forwards a written reason to him, and he is
+told explicitly that ignoring it is a valid answer.
 
-> The setup code dies when the container restarts, and enrolment only works from
-> his configured chat ID. Once set, the password can only be changed with the
-> current one.
+> An earlier version used a password and a one-time setup code. It was removed
+> after the code turned out to be regenerated on every restart — so the code
+> sitting in his inbox was usually the wrong one, and he'd be told his correct
+> input was invalid. Beyond the bug, a password was the wrong idea: it is a
+> secret that can be forgotten, and this project had already lost one that way.
 
 ## 6. Phone agent — 15 min
 
