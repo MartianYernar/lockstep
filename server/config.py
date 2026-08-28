@@ -34,6 +34,7 @@ class Config:
     plan_due: time
     plan_nag_times: list = field(default_factory=list)
     daily_report_at: time = time(22, 15)
+    hard_end_min: int = 22 * 60 + 20
     mode: str = "spot_check"
     spot_avg_min: int = 45
     spot_min_gap_min: int = 20
@@ -65,7 +66,8 @@ class Config:
             enforce_end_min=_minutes(sched["enforce_end"]),
             interval_min=int(sched["checkpoint_interval_min"]),
             grace_min=int(sched["grace_min"]),
-            mode=sched.get("mode", "spot_check"),
+            hard_end_min=_minutes(sched.get("hard_end", "22:20")),
+            mode=sched.get("mode", "block_start"),
             spot_avg_min=int(sched.get("spot_check_avg_min", 45)),
             spot_min_gap_min=int(sched.get("spot_check_min_gap_min", 20)),
             plan_due=_hhmm(sched["plan_due"]),

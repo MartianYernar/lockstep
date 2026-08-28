@@ -103,7 +103,7 @@ before = {c["due_at"] for c in eng5.checkpoints(DAY)}
 now5 = datetime(2026, 8, 25, 18, 0, tzinfo=TZ)
 r5 = eng5.apply_offset(DAY, now5, 60, "meeting ran over")
 after = eng5.checkpoints(DAY)
-check("window extended", eng5.window(DAY)[1], 23 * 60)
+check("offset clamped to the hard end", eng5.window(DAY)[1], 22*60 + 20)
 check("no duplicate due times", len({c["due_at"] for c in after}), len(after))
 stale = [c for c in after
          if c["state"] == "scheduled"

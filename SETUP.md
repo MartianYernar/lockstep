@@ -112,9 +112,22 @@ agent that works and one that dies quietly at 2am.
 On Windows, a full-screen screenshot (`Win+PrtScn`, or `Win+Shift+S` for the
 whole screen) includes the taskbar clock, which counts.
 
-## 7b. Cold Turkey — only when you're on the Windows laptop (September)
+## 7b. Cold Turkey blocks — one per kind of work
 
-Skip this now. It ships switched off.
+Cold Turkey is now central rather than optional: the three screenshots at the
+top of every block are the main proof. Build one block per kind of work, each
+allowing only what that work genuinely needs:
+
+| Block | Allow only |
+|---|---|
+| essay | ChatGPT + 1–2 sources |
+| school work | ChatGPT, Gemini, Obsidian, Classroom, Drive |
+| money work | Google Maps, ChatGPT, Gemini, Obsidian |
+| sport | nothing — block everything |
+| speaking | one ChatGPT chat URL, one Google Doc URL |
+
+Start the right one before each block, set the timer to the block length, and
+screenshot it three times.
 
 1. Install **Cold Turkey Blocker** (free tier is enough) on the Windows laptop.
 2. Build one block — call it `work` — set to *allow only* the sites you actually

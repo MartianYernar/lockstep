@@ -30,6 +30,19 @@ from typing import Literal
 State = Literal["scheduled", "asked", "overdue", "satisfied", "missed", "excused"]
 OPEN_STATES = ("asked", "overdue")
 
+# What each checkpoint wants to see. The design note behind this: being asked
+# for a photo every few minutes is its own stressor, and a system that raises
+# your cortisol to make you work is trading one problem for another. So proof
+# happens once, at the START of a block, and then it leaves you alone -- the
+# blocker screenshots are what carry the rest of the session, because a running
+# block with an allowlist is evidence about the whole hour rather than a moment.
+PROOF_KINDS = {
+    "blocker_toggle": "the blocker running, with the clock visible",
+    "blocker_allow":  "the ALLOWED sites list",
+    "blocker_block":  "the BLOCKED sites list",
+    "activity":       "the activity itself",
+}
+
 
 @dataclass
 class Action:
@@ -79,7 +92,11 @@ class Engine:
         # overrun push bedtime later is how a productivity system quietly turns
         # into a sleep-debt machine. Extra time comes out of something else.
         shift = (row["offset_minutes"] or 0) if row else 0
-        return self.cfg.enforce_start_min, self.cfg.enforce_end_min + shift
+        # Sleep is the one thing nothing is allowed to borrow from. Even a
+        # genuine emergency offset stops at the hard end -- past that point the
+        # answer is to sacrifice another task, not the night.
+        end = min(self.cfg.enforce_end_min + shift, self.cfg.hard_end_min)
+        return self.cfg.enforce_start_min, end
 
     def in_window(self, now: datetime) -> bool:
         start, end = self.window(now.date())
@@ -159,6 +176,31 @@ class Engine:
             last = minute
         return kept
 
+    def _block_start_times(self, day: date) -> list[tuple[int, int | None, str]]:
+        """Proof at the top of each block: three blocker shots a minute apart,
+        plus a photo of the activity itself for anything that isn't `work:`.
+
+        A `work:` block is done at a screen, so a running blocker with the right
+        allowlist already proves what is and isn't reachable. A sport or sleep
+        block isn't -- no screenshot shows you doing push-ups -- so those need
+        the extra photo of the thing itself.
+        """
+        start, end = self.window(day)
+        gap = int(self.cfg.raw.get("proof", {}).get("shot_gap_min", 1))
+        out: list[tuple[int, int | None, str]] = []
+        for b in self.db.blocks(day):
+            lo = max(b["start_min"], start)
+            if lo >= end:
+                continue
+            kinds = ["blocker_toggle", "blocker_allow", "blocker_block"]
+            if not b["label"].lower().startswith("work"):
+                kinds.append("activity")
+            for i, kind in enumerate(kinds):
+                minute = lo + i * gap
+                if minute < end and minute < b["end_min"]:
+                    out.append((minute, b["id"], kind))
+        return out
+
     def build_checkpoints(self, day: date, now: datetime | None = None) -> dict:
         """Materialise a day's checkpoints. Idempotent.
 
@@ -169,16 +211,20 @@ class Engine:
         it. You cannot photograph the past. Those slots are void.
         """
         now = now or self.cfg.now()
-        times = (self._fixed_times(day) if self.cfg.mode == "fixed"
-                 else self._spot_check_times(day))
+        if self.cfg.mode == "block_start":
+            times = self._block_start_times(day)
+        elif self.cfg.mode == "fixed":
+            times = [(m, b, "activity") for m, b in self._fixed_times(day)]
+        else:
+            times = [(m, b, "activity") for m, b in self._spot_check_times(day)]
         made = voided = 0
-        for minute, block_id in times:
+        for minute, block_id, kind in times:
             due = self.cfg.at(day, minute)
             past = due <= now
             cur = self.db.conn.execute(
-                "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id, state, settled_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (day.isoformat(), due.isoformat(), block_id,
+                "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id, kind, state, settled_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (day.isoformat(), due.isoformat(), block_id, kind,
                  "excused" if past else "scheduled", now.isoformat() if past else None),
             )
             if cur.rowcount:
@@ -194,7 +240,8 @@ class Engine:
 
     def checkpoints(self, day: date) -> list:
         return self.db.q(
-            "SELECT c.*, b.label AS label, b.category AS category "
+            "SELECT c.*, b.label AS label, b.category AS category, "
+            "b.start_min AS start_min, b.end_min AS end_min "
             "FROM checkpoints c LEFT JOIN blocks b ON b.id = c.block_id "
             "WHERE c.date = ? ORDER BY c.due_at",
             (day.isoformat(),),
@@ -374,11 +421,7 @@ class Engine:
                         "label": cp["label"] or "your planned task",
                         "category": cp["category"] or "other",
                         "due_at": cp["due_at"],
-                        "require_blocker": (
-                            bool(self.cfg.vision.get("require_blocker_for_work"))
-                            and (cp["category"] or "other") == "work"
-                            and self.is_first_of_block(day, cp["id"])
-                        ),
+                        "kind": cp["kind"],
                     }))
                 elif cp["state"] == "asked" and due + grace <= now:
                     self.db.run("UPDATE checkpoints SET state='overdue' WHERE id=?", (cp["id"],))

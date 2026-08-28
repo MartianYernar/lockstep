@@ -24,19 +24,30 @@ covering every minute of the enforced window:
 The bot refuses plans with gaps. `relax` is a legitimate block — a planned rest
 is still a plan, which is how holidays work here.
 
-**During the window (16:00–22:00)**, the bot asks for a photo at **unpredictable
-moments** inside each planned block — roughly one per 45 minutes of planned time,
-never two within 20 minutes, and never fewer than one per block. You get 5
-minutes to answer.
+**At the top of each block**, and nowhere else, you prove the session:
 
-Random beats a fixed interval for one reason: a photo proves a *moment*, not an
-*interval*. On a 30-minute timer you know you have a clear 29 minutes after each
-check. When you can't predict the ask, you can't stage the answer.
+1. Cold Turkey with the block **running** — toggle on, timer going, clock visible
+2. The **allowed** sites list
+3. The **blocked** sites list
 
-**Gemini checks the photo** for two things, and both must pass:
-- a *visible, burned-in* clock — the phone camera's timestamp stamp, or the menu
-  bar in a full-screen laptop screenshot — reading within 12 minutes of now
-- something in frame consistent with the block you planned
+A minute apart. For anything that isn't a `work:` block, a fourth photo of the
+activity itself — the bar mid-pull-up, the bed made, the sink you're at.
+
+Then it leaves you alone until the next block.
+
+That last part is the design, not a concession. Being interrupted every few
+minutes to prove you're concentrating interferes with the concentrating. A
+system that raises your cortisol to make you work has traded one problem for
+another. And a running blocker with a visible allowlist is *better* evidence
+than a spot check anyway: a photo proves a moment, a locked block proves the
+hour.
+
+**Gemini checks each photo** against what that particular shot was asked for,
+plus a visible burned-in clock reading within 12 minutes of now.
+
+It also enforces your own privacy rules and **rejects** anything showing a face,
+a name or login on screen, or a background that could place you. Rejected frames
+are never written to disk — not even as a thumbnail.
 
 **If you ignore it**, escalation starts on your phone and does not stop until a
 valid photo lands:
@@ -48,6 +59,11 @@ valid photo lands:
 | 20+ min | twice a minute |
 | 40+ min | three times a minute |
 | 60+ min | four times a minute (the ceiling) |
+
+**Sleep is protected absolutely.** Nothing pushes the day past 22:20 — not an
+overrun, not an emergency offset. Past that point the answer is to sacrifice
+another task, never the night. A productivity system that borrows from sleep is
+just a sleep-debt machine with extra steps.
 
 Escalation is **repetition, not volume**. It never gets louder than the level you
 set — falling further behind just makes it harder to sit through. There is no
@@ -66,8 +82,13 @@ touching the phone.
 **Once a day** you can `/offset <reason>` to push everything back an hour, with a
 photo of wherever you actually are. Once. One hour.
 
-**Turning it off** requires a password only your father knows, and your written
-reason reaches his Telegram *before* you're even asked for it.
+**Turning it off** is not something you can do. You can `/disable` to *ask*, and
+your reason reaches your father word for word — but only his `/stopbot`, from his
+own Telegram, actually stops it. Only his `/startbot` turns it back on.
+
+There is deliberately **no password**. A password can be forgotten, lost with a
+phone, or talked out of someone at 11pm. This project already lost one that way.
+A command that only arrives from one account cannot be forgotten or reset.
 
 ---
 

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     date         TEXT NOT NULL,
     due_at       TEXT NOT NULL,           -- ISO 8601, timezone aware
     block_id     INTEGER,
+    kind         TEXT NOT NULL DEFAULT 'activity',   -- see engine.PROOF_KINDS
     state        TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled|asked|satisfied|missed|excused
     asked_at     TEXT,
     settled_at   TEXT,
@@ -102,6 +103,10 @@ class Database:
         dhave = {r["name"] for r in self.conn.execute("PRAGMA table_info(days)")}
         if "extend_minutes" not in dhave:
             self.conn.execute("ALTER TABLE days ADD COLUMN extend_minutes INTEGER NOT NULL DEFAULT 0")
+        chave = {r["name"] for r in self.conn.execute("PRAGMA table_info(checkpoints)")}
+        if "kind" not in chave:
+            self.conn.execute(
+                "ALTER TABLE checkpoints ADD COLUMN kind TEXT NOT NULL DEFAULT 'activity'")
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(lock_state)")}
         for col, decl in (("last_tick_at", "TEXT"), ("last_agent_poll", "TEXT"),
                           ("guardian_chat_id", "INTEGER"), ("blocked_since", "TEXT"),

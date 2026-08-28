@@ -31,10 +31,14 @@ schedule:
   enforce_start: "16:00"          # proof window opens
   enforce_end:   "22:00"          # proof window closes
 
-  # spot_check = unpredictable checks inside each planned block (recommended:
-  #   you can't stage a photo for a moment you can't predict)
-  # fixed      = every N minutes, predictable
-  mode: spot_check
+  # block_start = prove the session once, at the top of each block, then be
+  #   left alone. Three blocker screenshots a minute apart, plus a photo of the
+  #   activity itself for anything that isn't `work:`. Being interrupted every
+  #   few minutes is its own stressor, and a system that raises your cortisol to
+  #   make you work has traded one problem for another.
+  # spot_check  = unpredictable checks throughout each block
+  # fixed       = every N minutes, predictable
+  mode: block_start
   spot_check_avg_min: 45          # roughly one check per this much planned time
   spot_check_min_gap_min: 20      # never two checks closer than this
   checkpoint_interval_min: 15     # only used when mode: fixed
@@ -101,7 +105,14 @@ vision:
   require_blocker_for_work: false
   blocker_name: "Cold Turkey"
 
+proof:
+  shot_gap_min: 1              # minutes between the three blocker screenshots
+
 privacy:
+  enforce: true                # reject photos that break the rules below
+  no_faces: true               # any identifiable face, yours or anyone's
+  no_identity: true            # names, logins, emails, account names on screen
+  no_location: true            # windows, streets, buildings, landmarks
   # Every photo is downscaled and stripped of metadata (GPS included) before it
   # is sent anywhere or written to disk.
   max_dimension: 1024          # verified: the timestamp still reads at 512px

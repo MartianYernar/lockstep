@@ -36,12 +36,19 @@ RESPONSE_SCHEMA = {
         "blocker_visible": {"type": "boolean"},
         "blocker_active": {"type": "boolean"},
         "blocker_allowlist_visible": {"type": "boolean"},
+        "blocker_blocklist_visible": {"type": "boolean"},
         "blocker_detail": {"type": "string"},
+        "face_visible": {"type": "boolean"},
+        "identity_visible": {"type": "boolean"},
+        "location_revealing": {"type": "boolean"},
+        "privacy_detail": {"type": "string"},
     },
     "required": [
         "timestamp_visible", "timestamp_text", "activity_seen",
         "activity_match", "confidence", "reason", "looks_like_screen_of_photo",
-        "blocker_visible", "blocker_active", "blocker_allowlist_visible", "blocker_detail",
+        "blocker_visible", "blocker_active", "blocker_allowlist_visible",
+        "blocker_blocklist_visible", "blocker_detail",
+        "face_visible", "identity_visible", "location_revealing", "privacy_detail",
     ],
 }
 
@@ -50,22 +57,21 @@ PROMPT = """You are the verifier for a personal accountability system. Judge ONE
 The person committed in advance to be doing this right now:
   TASK: "{label}"
   CATEGORY: {category}
-The photo is supposed to be proof they are doing it.
 Server time right now is {now} ({tz}).
+
+WHAT THIS PARTICULAR PHOTO IS SUPPOSED TO SHOW:
+{requirement}
 
 Report these fields, and nothing else:
 
 timestamp_visible - true only if a date and/or clock time is BURNED INTO the
-  image itself: a camera timestamp overlay, or a visible OS menu bar / taskbar
-  clock in a screenshot. A clock on a wall or a wristwatch in frame also counts.
-  Metadata you cannot see does not count. If you see no readable time, false.
+  image: a camera timestamp overlay, or a visible OS menu bar / taskbar clock
+  in a screenshot. A wall clock or wristwatch in frame counts. Metadata you
+  cannot see does not. If you see no readable time, false.
 timestamp_text - exactly what that visible time reads, verbatim. "" if none.
 activity_seen - one plain sentence: what is actually happening in the frame.
-activity_match - true if the frame is consistent with the committed TASK.
-  Be reasonable, not gullible. A laptop with a linear algebra PDF open matches
-  "work: linear algebra pset". A laptop showing YouTube does not. A gym floor,
-  weights or a treadmill matches "gym". A dark ceiling matches nothing.
-  Judge consistency, not proof of effort.
+activity_match - true if the frame satisfies the requirement above.
+  Be reasonable, not gullible. Judge consistency, not proof of effort.
 confidence - 0.0 to 1.0, how sure you are about activity_match.
 reason - one short sentence a person would find fair, addressed to them
   directly. If activity_match is false, say concretely what was missing.
@@ -75,12 +81,44 @@ looks_like_screen_of_photo - true if this is a picture OF a screen showing
 blocker_visible - true if a website/app blocker window or overlay is on screen.
 blocker_active - true if that blocker clearly shows a block currently RUNNING:
   an active session, a countdown, a "locked"/"blocked until" state. A blocker
-  that is merely open, or showing a finished or not-yet-started block, is false.
-blocker_allowlist_visible - true if the list of allowed or blocked sites is
+  merely open, or showing a finished or not-yet-started block, is false.
+blocker_allowlist_visible - true if a list of ALLOWED / permitted / exception
+  sites is readable in the frame.
+blocker_blocklist_visible - true if a list of BLOCKED / banned sites is
   readable in the frame.
-blocker_detail - one sentence on what the blocker shows: its state, any timer,
-  and which sites are listed. "" if no blocker is visible.
-{blocker_note}"""
+blocker_detail - one sentence on what the blocker shows. "" if none visible.
+
+Now three privacy fields. The person has asked to be warned about these, so
+judge them strictly -- a false negative here costs them more than a retake:
+
+face_visible - true if any human face is identifiable in the frame, theirs or
+  anyone else's. A body with the face out of frame or turned away is false.
+identity_visible - true if any name, username, login, email address, account
+  name or profile photo is readable anywhere, including in browser tabs,
+  window titles, sidebars and notification banners.
+location_revealing - true if the background could place them: a window with a
+  view out, buildings, a street, a recognisable landmark, house numbers,
+  signage. An interior wall, floor, desk or ceiling is false.
+privacy_detail - one sentence naming what would need to move out of frame.
+  "" if nothing.
+"""
+
+
+REQUIREMENTS = {
+    "blocker_toggle": (
+        "A screenshot of {blocker} with a block ACTIVELY RUNNING -- the toggle on,\n"
+        "  a timer counting, and the computer's clock visible in the taskbar."),
+    "blocker_allow": (
+        "A screenshot of {blocker} showing the list of ALLOWED / permitted websites\n"
+        "  for this block, readable, with the clock visible."),
+    "blocker_block": (
+        "A screenshot of {blocker} showing the list of BLOCKED websites for this\n"
+        "  block, readable, with the clock visible."),
+    "activity": (
+        "A photograph of the person actually doing the task, with a visible\n"
+        "  timestamp. For sport: the body mid-exercise or the equipment in use.\n"
+        "  For sleep: the bed, ready. For cleaning: the thing being cleaned."),
+}
 
 
 @dataclass
@@ -90,7 +128,12 @@ class Verdict:
     blocker_visible: bool = False
     blocker_active: bool = False
     blocker_allowlist_visible: bool = False
+    blocker_blocklist_visible: bool = False
     blocker_detail: str = ""
+    face_visible: bool = False
+    identity_visible: bool = False
+    location_revealing: bool = False
+    privacy_detail: str = ""
     timestamp_visible: bool = False
     timestamp_text: str = ""
     timestamp_fresh: bool = False
@@ -207,17 +250,12 @@ class Validator:
 
     async def check(self, image_bytes: bytes, label: str, category: str,
                     now: datetime, mime: str = "image/jpeg",
-                    require_blocker: bool = False) -> Verdict:
+                    kind: str = "activity") -> Verdict:
         v = self.cfg.vision
         blocker = v.get("blocker_name", "Cold Turkey")
-        note = ""
-        if require_blocker:
-            note = (f"\nTHIS ONE IS A BLOCKER CHECK. The image should be a full-screen "
-                    f"screenshot of a computer showing {blocker} with a block actively "
-                    f"running, its allow/block list readable, and the OS taskbar clock "
-                    f"visible. Judge the blocker fields with care -- they decide the result.")
+        requirement = REQUIREMENTS.get(kind, REQUIREMENTS["activity"]).format(blocker=blocker)
         prompt = PROMPT.format(
-            label=label, category=category, blocker_note=note,
+            label=label, category=category, requirement=requirement,
             now=now.strftime("%Y-%m-%d %H:%M"), tz=str(self.cfg.tz),
         )
 
@@ -229,9 +267,6 @@ class Validator:
                 break
             except Exception as exc:                        # noqa: BLE001
                 last_err = exc
-                # Out of quota or credit on every model is not a transient
-                # failure -- retrying just burns time while someone stands there
-                # holding a phone. Give up immediately and say why.
                 text = str(exc)
                 if "RESOURCE_EXHAUSTED" in text or "429" in text:
                     log.error("every model is out of quota/credit; not retrying")
@@ -240,8 +275,6 @@ class Validator:
                 await asyncio.sleep(2 ** attempt)
 
         if data is None:
-            # Infrastructure failed, not the person. Accept, but mark it loudly:
-            # a silently-accepted photo would otherwise be farmable during an outage.
             self.consecutive_failures += 1
             quota = "RESOURCE_EXHAUSTED" in str(last_err) or "429" in str(last_err)
             why = ("Out of API quota or credit — nothing is being checked right now."
@@ -266,7 +299,12 @@ class Validator:
             blocker_visible=bool(data.get("blocker_visible")),
             blocker_active=bool(data.get("blocker_active")),
             blocker_allowlist_visible=bool(data.get("blocker_allowlist_visible")),
+            blocker_blocklist_visible=bool(data.get("blocker_blocklist_visible")),
             blocker_detail=data.get("blocker_detail", ""),
+            face_visible=bool(data.get("face_visible")),
+            identity_visible=bool(data.get("identity_visible")),
+            location_revealing=bool(data.get("location_revealing")),
+            privacy_detail=data.get("privacy_detail", ""),
             timestamp_visible=bool(data.get("timestamp_visible")),
             timestamp_text=stamp_text,
             timestamp_fresh=fresh,
@@ -275,6 +313,23 @@ class Validator:
             confidence=conf,
             replay_suspected=bool(data.get("looks_like_screen_of_photo")),
         )
+
+        # --- privacy first: never send a second copy of a bad frame anywhere ---
+        priv = self.cfg.raw.get("privacy", {})
+        if priv.get("enforce", True):
+            leaks = []
+            if base["face_visible"] and priv.get("no_faces", True):
+                leaks.append("a face")
+            if base["identity_visible"] and priv.get("no_identity", True):
+                leaks.append("your name or login")
+            if base["location_revealing"] and priv.get("no_location", True):
+                leaks.append("something that shows where you are")
+            if leaks:
+                return Verdict(
+                    ok=False, failure_code="privacy",
+                    reason=f"Not counted — this shows {', '.join(leaks)}. "
+                           f"{base['privacy_detail']} Reframe and send it again. "
+                           "(Your rule, not mine.)", **base)
 
         if base["replay_suspected"]:
             return Verdict(ok=False, failure_code="replay",
@@ -288,20 +343,27 @@ class Validator:
             return Verdict(ok=False, failure_code="stale",
                            reason=f"The stamp reads '{stamp_text}' — about {drift_min} min off "
                                   f"from now. Needs to be within {tolerance} min.", **base)
-        if require_blocker:
+
+        # --- what this specific shot was asked for ---
+        if kind.startswith("blocker"):
             if not base["blocker_visible"]:
                 return Verdict(ok=False, failure_code="no_blocker",
-                               reason=f"No {blocker} window in the shot. This check needs a "
-                                      f"full-screen screenshot showing the blocker running.",
-                               **base)
-            if not base["blocker_active"]:
+                               reason=f"No {blocker} window in the shot. Full-screen "
+                                      f"screenshot showing the blocker, please.", **base)
+            if kind == "blocker_toggle" and not base["blocker_active"]:
                 return Verdict(ok=False, failure_code="blocker_off",
                                reason=f"{blocker} is on screen but the block isn't running. "
-                                      f"Start the block, then screenshot it.", **base)
-            if not base["blocker_allowlist_visible"]:
+                                      f"Start it, then screenshot it.", **base)
+            if kind == "blocker_allow" and not base["blocker_allowlist_visible"]:
                 return Verdict(ok=False, failure_code="no_allowlist",
-                               reason="The allowed/blocked site list isn't readable. Open the "
-                                      "block's details so the list shows.", **base)
+                               reason="I can't read the allowed-sites list. Open the block's "
+                                      "details so the list shows.", **base)
+            if kind == "blocker_block" and not base["blocker_blocklist_visible"]:
+                return Verdict(ok=False, failure_code="no_blocklist",
+                               reason="I can't read the blocked-sites list. Open the block's "
+                                      "details so the list shows.", **base)
+            return Verdict(ok=True, failure_code="ok",
+                           reason=data.get("reason") or "Counted.", **base)
 
         if not match:
             return Verdict(ok=False, failure_code="mismatch",

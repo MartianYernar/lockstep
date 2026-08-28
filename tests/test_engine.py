@@ -88,14 +88,14 @@ check("22:30 idle", eng.agent_state(T(22, 30)).active, False)
 print("\n=== 7. offset shifts the day ===")
 before_end = eng.window(DAY)[1]
 r = eng.apply_offset(DAY, T(18, 0), 60, "met homies after class")
-check("window extended by 60", eng.window(DAY)[1], before_end + 60)
+check("offset stops at the 22:20 hard end, not 23:00", eng.window(DAY)[1], 22*60 + 20)
 check("checkpoints excused", r["excused"] > 0, True)
 # The count of "added" stopped meaning anything once apply_offset started
 # clearing future checkpoints and rebuilding (it has to, or a shifted block
 # leaves orphans at its old times). Assert the property that actually matters.
 _cps = eng.checkpoints(DAY)
 _last = max(datetime.fromisoformat(c["due_at"]) for c in _cps)
-check("checkpoints reach the extended window", _last.hour * 60 + _last.minute >= 22*60 + 45, True)
+check("checkpoints reach the extended window", _last.hour * 60 + _last.minute >= 22*60, True)
 check("no duplicate due times", len({c["due_at"] for c in _cps}), len(_cps))
 check("nothing scheduled past the new window end",
       max(datetime.fromisoformat(c["due_at"]).hour * 60 +

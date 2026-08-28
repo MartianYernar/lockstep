@@ -143,6 +143,8 @@ class LockstepBot:
                 "/pause HOURS reason — grant a pause (illness, travel)\n"
                 "/resume — end a pause early\n"
                 "/extend MONTHS — extend the commitment period\n"
+                "/stopbot reason — stop the system (only you can)\n"
+                "/startbot — turn it back on\n"
                 "/report — today's numbers on demand\n"
                 "/status — system state",
                 parse_mode=ParseMode.HTML)
@@ -417,79 +419,79 @@ class LockstepBot:
     # the shutdown request
     # ======================================================================
     async def cmd_disable(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """You can ask. You cannot do it.
+
+        The password is gone deliberately. A password is a secret that can be
+        forgotten, lost with a phone, or wheedled out of someone at 11pm — and
+        this project has already been bitten once by a forgotten one. A command
+        that only ever arrives from your father's own Telegram account cannot be
+        forgotten, cannot be reset, and cannot be typed by you.
+        """
         if not self._is_user(update):
             return
-        now = self.cfg.now()
         if not self.lock.enabled:
             await update.message.reply_text("It's already off.")
             return
-        if not self.lock.is_configured:
+        if not self.lock.guardian_id():
             await update.message.reply_text(
-                "No guardian password is set yet, so there's nothing holding this shut. "
-                "Get that set up first — otherwise this whole thing is decoration.")
+                "No guardian is registered, so nothing is holding this shut. "
+                "Get that set up first — otherwise the whole thing is decoration.")
             return
-
-        left = self.lock.days_remaining(now.date())
         self.pending[update.effective_chat.id] = {"action": "disable_reason"}
+        left = self.lock.days_remaining(self.cfg.now().date())
         await update.message.reply_text(
-            f"You're {left} days from the end of the commitment.\n\n"
-            "Write the reason you want this off. It goes to your father's Telegram "
-            "word for word, before you're even asked for the password.\n\n"
-            "Send /cancel to drop it.")
+            (f"You're {left} days from the end of the commitment.\n\n" if left else "")
+            + "Write why you want this off. It goes to your father word for word, "
+            "and only he can actually stop it — there's no password you can enter.\n\n"
+            "/cancel to drop it.")
 
     async def _handle_disable_reason(self, update: Update, reason: str) -> None:
         if len(reason) < 15:
             await update.message.reply_text(
                 "Longer than that. Write the actual reason — he's the one reading it.")
             return
-        self.pending[update.effective_chat.id] = {"action": "disable_password", "reason": reason}
+        self.pending.pop(update.effective_chat.id, None)
         self.ledger.append("disable_requested", {"reason": reason})
         await self.send_guardian(
             "⚠️ <b>Ansar is asking to turn the system off.</b>\n\n"
             f"His reason:\n<i>{html.escape(reason)}</i>\n\n"
-            "He is being asked for your password now. If you did not give it to him, "
-            "he cannot proceed. You do not have to do anything.")
+            "If you agree, send:\n<code>/stopbot</code>\n\n"
+            "If you don't, do nothing at all. It stays on. You do not owe him a "
+            "reply, and he cannot do this without you.")
         await update.message.reply_text(
-            "Sent to your father. Now send the password.\n\n"
-            "Three wrong tries locks this for 30 minutes.")
+            "Sent to your father. Only he can stop it now.\n\n"
+            "If he says nothing, it stays on. That was the point of setting it up "
+            "this way while you were thinking clearly.")
 
-    async def _handle_disable_password(self, update: Update, password: str, reason: str) -> None:
-        now = self.cfg.now()
-        try:
-            ok = self.lock.verify(password, now)
-        except LockError as exc:
-            await update.message.reply_text(f"❌ {exc}")
+    async def cmd_stopbot(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_guardian(update):
+            await update.message.reply_text(
+                "Only your father can stop this, from his own Telegram.")
             return
-
-        try:
-            await update.message.delete()          # don't leave it in the chat log
-        except Exception:                                     # noqa: BLE001
-            pass
-
-        if not ok:
-            attempts = self.db.lock()["failed_attempts"]
-            await update.message.reply_text(f"❌ Wrong. Attempt {attempts} of 3.")
-            await self.send_guardian(
-                f"❌ Wrong password entered ({attempts}/3) for the shutdown request.")
-            return
-
-        self.pending.pop(update.effective_chat.id, None)
-        self.lock.disable(reason, now)
+        reason = update.message.text.partition(" ")[2].strip() or "no reason given"
+        self.lock.disable(reason, self.cfg.now())
         await update.message.reply_text(
-            "🔴 System off.\n\nSend /enable when you want it back. "
-            "No password needed to turn it back on — that direction was never locked.")
-        await self.send_guardian(
-            "🔴 <b>System turned OFF.</b> The password was correct.\n\n"
-            f"Reason he gave:\n<i>{html.escape(reason)}</i>")
+            "🔴 System stopped. Send <code>/startbot</code> to turn it back on "
+            "whenever you decide.", parse_mode=ParseMode.HTML)
+        await self.send_user(
+            "🔴 <b>Your father stopped the system.</b>\n\n"
+            "It stays off until he restarts it. You can't turn it back on yourself "
+            "either — that direction is his too.")
+
+    async def cmd_startbot(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_guardian(update):
+            await update.message.reply_text("Only your father can restart it.")
+            return
+        self.lock.enable(self.cfg.now())
+        await update.message.reply_text("🟢 System running again.")
+        await self.send_user("🟢 <b>Your father restarted the system.</b>")
 
     async def cmd_enable(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        now = self.cfg.now()
-        if self.lock.enabled:
-            await update.message.reply_text("Already running.")
+        if self._is_guardian(update):
+            await self.cmd_startbot(update, _ctx)
             return
-        self.lock.enable(now)
-        await update.message.reply_text("🟢 Back on.")
-        await self.send_guardian("🟢 Ansar switched the system back on.")
+        await update.message.reply_text(
+            "Not yours to switch. Your father sends /startbot.")
 
     async def cmd_setguardian(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -784,18 +786,16 @@ class LockstepBot:
 
         label = cp["label"] or "your planned task"
         category = cp["category"] or "other"
-        require_blocker = (
-            bool(self.cfg.vision.get("require_blocker_for_work"))
-            and category == "work"
-            and self.engine.is_first_of_block(today, cp["id"])
-        )
         await update.message.chat.send_action("typing")
         verdict = await self.validator.check(blob, label, category, now, mime=mime,
-                                             require_blocker=require_blocker)
+                                             kind=cp["kind"] or "activity")
 
         if not verdict.ok:
             self.db.run("UPDATE checkpoints SET attempts = attempts + 1, verdict = ? WHERE id = ?",
                         (verdict.to_json(), cp["id"]))
+            # A frame rejected for privacy is never written to disk, not even as
+            # a thumbnail. Storing the thing we just told you to retake would be
+            # a strange way to respect the rule.
             self.ledger.append("photo_rejected",
                                {"checkpoint": cp["id"], "code": verdict.failure_code})
             await update.message.reply_text(
@@ -854,9 +854,6 @@ class LockstepBot:
             return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
-            return
-        if action == "disable_password":
-            await self._handle_disable_password(update, text, pend["reason"])
             return
 
         # A bare plan pasted with no command is still obviously a plan.
@@ -948,29 +945,32 @@ class LockstepBot:
         p = act.payload
         if act.kind == "ask":
             due = datetime.fromisoformat(p["due_at"])
-            if p.get("require_blocker"):
-                blocker = self.cfg.vision.get("blocker_name", "Cold Turkey")
-                body = (f"🔒 <b>{due:%H:%M}</b> — starting: {html.escape(p['label'])}\n\n"
-                        f"This one needs a <b>full-screen screenshot</b> showing:\n"
-                        f"• {blocker} with the block <b>running</b>\n"
-                        f"• the allowed/blocked site list readable\n"
-                        f"• the taskbar clock visible\n\n"
-                        f"You have {self.cfg.grace_min} min.")
-            else:
-                body = (f"📸 <b>{due:%H:%M}</b> — {html.escape(p['label'])}\n\n"
-                        f"Photo with the timestamp visible, within {self.cfg.grace_min} min.")
-                hint_cats = self.cfg.raw.get("privacy", {}).get(
-                    "framing_hint_categories", [])
-                if p.get("category") in hint_cats:
-                    body += ("\n\n🔒 Outdoors — frame it tight. Point at the equipment "
-                             "or yourself, not the skyline. Buildings in the background "
-                             "are enough to place you.")
-                if p.get("also_due"):
-                    body += (f"\n\n({p['also_due']} earlier checkpoint came due too — "
-                             "one photo covers it.)")
+            kind = p.get("kind", "activity")
+            blocker = self.cfg.vision.get("blocker_name", "Cold Turkey")
+            label = html.escape(p["label"])
+            asks = {
+                "blocker_toggle": (
+                    f"🔒 <b>{due:%H:%M}</b> — starting: {label}\n\n"
+                    f"<b>Shot 1 of 3.</b> Screenshot {blocker} with the block "
+                    f"<b>running</b> — toggle on, timer going, taskbar clock visible."),
+                "blocker_allow": (
+                    f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
+                    f"<b>Shot 2 of 3.</b> Screenshot the <b>allowed</b> sites list."),
+                "blocker_block": (
+                    f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
+                    f"<b>Shot 3 of 3.</b> Screenshot the <b>blocked</b> sites list."),
+                "activity": (
+                    f"📸 <b>{due:%H:%M}</b> — {label}\n\n"
+                    f"Photo of you actually doing it, timestamp visible."),
+            }
+            body = asks.get(kind, asks["activity"])
+            if kind == "activity":
+                body += ("\n\n🔒 No face, no name or login on screen, nothing "
+                         "behind you that shows where you are.")
+            body += f"\n\n{self.cfg.grace_min} min."
             await self.send_user(body)
-            self.ledger.append("checkpoint_asked", {"checkpoint": p["checkpoint_id"],
-                                                    "blocker": bool(p.get("require_blocker"))})
+            self.ledger.append("checkpoint_asked",
+                               {"checkpoint": p["checkpoint_id"], "kind": kind})
 
         elif act.kind == "mark_missed":
             labels = p.get("labels") or [p.get("label", "your planned task")]
@@ -1069,6 +1069,7 @@ class LockstepBot:
             ("testsiren", self.cmd_testsiren), ("stopsiren", self.cmd_stopsiren),
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
             ("more", self.cmd_more), ("replan", self.cmd_replan),
+            ("stopbot", self.cmd_stopbot), ("startbot", self.cmd_startbot),
             ("guardian_change", self.cmd_guardian_change), ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:

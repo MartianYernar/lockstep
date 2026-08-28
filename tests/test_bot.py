@@ -100,46 +100,56 @@ run(bot.on_text(u2, None))
 check("free text accepted as the plan", "Locked in" in u2.message.last, True)
 check("pending cleared", USER in bot.pending, False)
 
-print("\n=== the disable gauntlet ===")
+print("\n=== only your father can stop it — there is no password to type ===")
 cfg, db, led, eng, lk, bot, val = make()
-lk._setup_token = "ABC123"
-lk.complete_setup("ABC123", "father-password", GUARDIAN)
 bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
 
 u = FakeUpdate("/disable")
 run(bot.cmd_disable(u, None))
-check("asks for a reason first", "reason" in u.message.last.lower(), True)
-# The prompt *mentions* the password to explain what's coming; what matters is
-# that it will not accept one yet.
-check("is not yet accepting a password", bot.pending[USER]["action"], "disable_reason")
+check("asks you to write why", "Write why" in u.message.last, True)
+check("says plainly there is no password", "no password you can enter" in u.message.last, True)
+check("awaiting the reason", bot.pending[USER]["action"], "disable_reason")
 
 u2 = FakeUpdate("too short")
 run(bot.on_text(u2, None))
 check("a throwaway reason is refused", "Longer" in u2.message.last, True)
-check("still awaiting the reason", bot.pending[USER]["action"], "disable_reason")
 
 u3 = FakeUpdate("i have a fever and cannot do any of this today")
 run(bot.on_text(u3, None))
 g = bot.app.bot.to(GUARDIAN)
-check("father is told BEFORE the password step", len(g), 1)
+check("father is told", len(g), 1)
 check("his exact words are forwarded", "fever and cannot do any of this" in g[0], True)
-check("now asks for the password", bot.pending[USER]["action"], "disable_password")
+check("father is told the command", "/stopbot" in g[0], True)
+check("father is told he may simply ignore it", "do nothing at all" in g[0], True)
+check("system is still on — asking is not stopping", lk.enabled, True)
 
-u4 = FakeUpdate("wrong-guess")
-run(bot.on_text(u4, None))
-check("wrong password rejected", "Wrong" in u4.message.last, True)
-check("password message deleted from the chat", u4.message.deleted, True)
-check("system still on", lk.enabled, True)
-check("father told about the failed attempt", len(bot.app.bot.to(GUARDIAN)), 2)
+print("\n=== you cannot stop it yourself, by any route ===")
+for cmd, fn in (("/stopbot", bot.cmd_stopbot), ("/startbot", bot.cmd_startbot)):
+    u4 = FakeUpdate(cmd, chat_id=USER)
+    run(fn(u4, None))
+    check(f"{cmd} refused from you", "Only your father" in u4.message.last, True)
+check("still on", lk.enabled, True)
 
-u5 = FakeUpdate("father-password")
-run(bot.on_text(u5, None))
-check("correct password turns it off", lk.enabled, False)
-check("father told it went off", "turned OFF" in bot.app.bot.to(GUARDIAN)[-1], True)
+ue = FakeUpdate("/enable", chat_id=USER)
+run(bot.cmd_enable(ue, None))
+check("/enable is not yours either", "Not yours to switch" in ue.message.last, True)
 
-u6 = FakeUpdate("/enable")
-run(bot.cmd_enable(u6, None))
-check("re-enabling needs no password", lk.enabled, True)
+print("\n=== his command works, in both directions ===")
+ug = FakeUpdate("/stopbot he is genuinely ill", chat_id=GUARDIAN)
+run(bot.cmd_stopbot(ug, None))
+check("father stops it", lk.enabled, False)
+check("you are told he did", "father stopped" in bot.app.bot.to(USER)[-1], True)
+
+ur = FakeUpdate("/enable", chat_id=USER)
+run(bot.cmd_enable(ur, None))
+check("you cannot restart it either", lk.enabled, False)
+
+ug2 = FakeUpdate("/startbot", chat_id=GUARDIAN)
+run(bot.cmd_startbot(ug2, None))
+check("only he restarts it", lk.enabled, True)
+check("recorded both ways",
+      [r["kind"] for r in db.q("SELECT kind FROM events") if r["kind"].startswith("system_")],
+      ["system_disabled", "system_enabled"])
 
 print("\n=== /offset: one per day, reason then photo ===")
 cfg, db, led, eng, lk, bot, val = make()
