@@ -53,6 +53,12 @@ commitment:
   # decision, and states pass -- so the exit is a delay rather than a wall.
   # Costs nothing to someone with a real reason; costs everything to a craving.
   stop_delay_hours: 24
+
+  # A file holding your own reasoning for doing this, in your own words. The
+  # bot reads it fresh each time and shows it to you before it will even take a
+  # request to stop. It cannot prevent anything -- it is a mirror, not a lock.
+  # Point it at a note in your Obsidian vault.
+  why_file: ""
   start: "2026-08-25"       # day one
   months: 3                 # you cannot disable before start + this many months
   total_months: 12          # the full run you're aiming at

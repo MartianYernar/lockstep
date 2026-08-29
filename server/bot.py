@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import pathlib
 from datetime import date, datetime, timedelta
 
 from telegram import Update
@@ -162,6 +163,7 @@ class LockstepBot:
             "/replan — rewrite the rest of today; the end time stays fixed\n"
             "/remind 3 sep 14:40 doctor — nags you the night before and that morning\n"
             "/reminders — what's coming up · /forget N — drop one\n"
+            "/why — read back your own reasoning for doing this\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
@@ -532,6 +534,37 @@ class LockstepBot:
     # ======================================================================
     # the shutdown request
     # ======================================================================
+    def _why_text(self) -> str | None:
+        """Your own reasoning, read fresh from disk each time.
+
+        Not a rule and not a lock -- a mirror. It can't stop you doing anything.
+        It just makes sure the version of you that wrote it gets a word in
+        before the version that wants out acts.
+        """
+        path = self.cfg.raw.get("commitment", {}).get("why_file")
+        if not path:
+            return None
+        try:
+            text = pathlib.Path(path).expanduser().read_text().strip()
+        except Exception:                                     # noqa: BLE001
+            return None
+        body = "\n".join(l for l in text.splitlines()
+                          if l.strip() and not l.lstrip().startswith(("#", ">", "<!--")))
+        return body.strip() or None
+
+    async def cmd_why(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        why = self._why_text()
+        if not why:
+            await update.message.reply_text(
+                "You haven't written it yet. Put your reasoning in the file named "
+                "by <code>commitment.why_file</code> and I'll read it back to you "
+                "whenever you ask — and whenever you try to stop.",
+                parse_mode=ParseMode.HTML)
+            return
+        await update.message.reply_text(
+            f"<b>In your own words:</b>\n\n<i>{html.escape(why[:3000])}</i>",
+            parse_mode=ParseMode.HTML)
+
     async def cmd_disable(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """You can ask. You cannot do it.
 
@@ -551,12 +584,21 @@ class LockstepBot:
                 "No guardian is registered, so nothing is holding this shut. "
                 "Get that set up first — otherwise the whole thing is decoration.")
             return
+        why = self._why_text()
+        if why:
+            # Before anything else, your own argument. Written by you, on a day
+            # you were thinking clearly, for exactly this moment.
+            await update.message.reply_text(
+                f"<b>Before you do this — you wrote this, for now:</b>\n\n"
+                f"<i>{html.escape(why[:3000])}</i>\n\n"
+                f"— — —",
+                parse_mode=ParseMode.HTML)
         self.pending[update.effective_chat.id] = {"action": "disable_reason"}
         left = self.lock.days_remaining(self.cfg.now().date())
         await update.message.reply_text(
             (f"You're {left} days from the end of the commitment.\n\n" if left else "")
-            + "Write why you want this off. It goes to your father word for word, "
-            "and only he can actually stop it — there's no password you can enter.\n\n"
+            + "Still want to? Write why. It goes to your father word for word, "
+            "and only he can actually stop it — and not for 24 hours after that.\n\n"
             "/cancel to drop it.")
 
     async def _handle_disable_reason(self, update: Update, reason: str) -> None:
@@ -1270,7 +1312,7 @@ class LockstepBot:
             ("more", self.cmd_more), ("replan", self.cmd_replan),
             ("stopbot", self.cmd_stopbot), ("startbot", self.cmd_startbot),
             ("stopnow", self.cmd_stopnow), ("cancelstop", self.cmd_cancelstop),
-            ("nevermind", self.cmd_nevermind),
+            ("nevermind", self.cmd_nevermind), ("why", self.cmd_why),
             ("remind", self.cmd_remind), ("reminders", self.cmd_reminders),
             ("forget", self.cmd_forget),
             ("unblock", self.cmd_unblock), ("block", self.cmd_block),
