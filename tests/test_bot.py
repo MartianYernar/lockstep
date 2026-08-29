@@ -107,7 +107,7 @@ bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
 u = FakeUpdate("/disable")
 run(bot.cmd_disable(u, None))
 check("asks you to write why", "Write why" in u.message.last, True)
-check("says plainly there is no password", "no password you can enter" in u.message.last, True)
+check("says only he can, and not for 24h", "not for 24 hours" in u.message.last, True)
 check("awaiting the reason", bot.pending[USER]["action"], "disable_reason")
 
 u2 = FakeUpdate("too short")
