@@ -164,6 +164,7 @@ class LockstepBot:
             "/remind 3 sep 14:40 doctor — nags you the night before and that morning\n"
             "/reminders — what's coming up · /forget N — drop one\n"
             "/why — read back your own reasoning for doing this\n"
+            "/logs — recent server activity · /restart — bounce the server\n"
             "/offset reason — push the day back one hour (once a day, needs a photo)\n"
             "/testsiren — fire the phone alarm now, to check it works\n"
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
@@ -860,6 +861,50 @@ class LockstepBot:
         self.db.set_lock(muted_until=None)
         await update.message.reply_text("🔔 Siren back on.")
 
+    async def cmd_logs(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Read-only log access, so you never need SSH to diagnose anything.
+
+        This exists to make "your father owns the server" survivable. Without
+        it you need shell access to know why something broke, and needing shell
+        access is what forces the account back into your hands.
+        """
+        if not (self._is_user(update) or self._is_guardian(update)):
+            return
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["tail", "-n", "40", os.environ.get("LOCKSTEP_LOG", "/proc/1/fd/1")],
+                capture_output=True, text=True, timeout=10).stdout
+        except Exception:                                     # noqa: BLE001
+            out = ""
+        if not out.strip():
+            ok, bad = self.ledger.verify()
+            rows = self.db.q("SELECT ts, kind, payload FROM events ORDER BY id DESC LIMIT 15")
+            out = "\n".join(f"{r['ts'][11:19]}  {r['kind']}  {r['payload'][:50]}"
+                             for r in reversed(rows))
+            out = f"(no container log reachable — showing the event ledger)\n\n{out}"
+        await update.message.reply_text(
+            f"<pre>{html.escape(out[-3500:])}</pre>", parse_mode=ParseMode.HTML)
+
+    async def cmd_restart(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Bounce the process. Docker's restart policy brings it straight back.
+
+        Restarting is the only server operation you actually need day to day,
+        so it lives here rather than behind an SSH key. Note it cannot be used
+        to stop anything: the supervisor restarts it within seconds, and if it
+        somehow doesn't, the external heartbeat tells your father.
+        """
+        if not (self._is_user(update) or self._is_guardian(update)):
+            return
+        self.ledger.append("restart_requested", {"by": update.effective_chat.id})
+        await update.message.reply_text(
+            "🔄 Restarting. Back in about ten seconds.\n\n"
+            "(This can't be used to switch anything off — the supervisor brings "
+            "it straight back, and if it didn't, the heartbeat would tell your "
+            "father within fifteen minutes.)")
+        import asyncio as _a
+        _a.get_running_loop().call_later(1.0, lambda: os._exit(0))
+
     async def cmd_cancel(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self.pending.pop(update.effective_chat.id, None):
             await update.message.reply_text("Dropped.")
@@ -1313,6 +1358,7 @@ class LockstepBot:
             ("stopbot", self.cmd_stopbot), ("startbot", self.cmd_startbot),
             ("stopnow", self.cmd_stopnow), ("cancelstop", self.cmd_cancelstop),
             ("nevermind", self.cmd_nevermind), ("why", self.cmd_why),
+            ("logs", self.cmd_logs), ("restart", self.cmd_restart),
             ("remind", self.cmd_remind), ("reminders", self.cmd_reminders),
             ("forget", self.cmd_forget),
             ("unblock", self.cmd_unblock), ("block", self.cmd_block),
