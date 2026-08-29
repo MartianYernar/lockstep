@@ -143,7 +143,9 @@ class LockstepBot:
                 "/pause HOURS reason — grant a pause (illness, travel)\n"
                 "/resume — end a pause early\n"
                 "/extend MONTHS — extend the commitment period\n"
-                "/stopbot reason — stop the system (only you can)\n"
+                "/stopbot reason — stop it, 24h from now\n"
+                "/stopnow reason — stop it immediately (real emergencies)\n"
+                "/cancelstop — call off a scheduled stop\n"
                 "/startbot — turn it back on\n"
                 "/unblock 10 — open the app blocker briefly\n"
                 "/block — close it again\n"
@@ -197,6 +199,9 @@ class LockstepBot:
             f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'}",
             f"Phone agent: {self._phone_status(now)}",
         ]
+        pend = self.lock.pending_stop()
+        if pend:
+            lines.append(f"⏳ Stopping at {pend:%H:%M on %d %b} — /nevermind to call it off")
         if row["blocked_since"]:
             lines.append("🚫 <b>You have this bot blocked</b> — your father was told.")
         if row["muted_until"] and now < datetime.fromisoformat(row["muted_until"]):
@@ -573,19 +578,70 @@ class LockstepBot:
             "this way while you were thinking clearly.")
 
     async def cmd_stopbot(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Agrees to stop — in 24 hours, not now."""
         if not self._is_guardian(update):
             await update.message.reply_text(
                 "Only your father can stop this, from his own Telegram.")
             return
+        now = self.cfg.now()
         reason = update.message.text.partition(" ")[2].strip() or "no reason given"
-        self.lock.disable(reason, self.cfg.now())
+        hours = int(self.cfg.raw.get("commitment", {}).get("stop_delay_hours", 24))
+        at = self.lock.schedule_stop(reason, now, hours)
         await update.message.reply_text(
-            "🔴 System stopped. Send <code>/startbot</code> to turn it back on "
-            "whenever you decide.", parse_mode=ParseMode.HTML)
+            f"⏳ It will stop at <b>{at:%H:%M on %d %b}</b> — {hours} hours from now, "
+            "not immediately.\n\n"
+            "Why the delay: an urge is a state, not a decision, and states pass. "
+            "If he still wants this tomorrow it costs him nothing to wait. If he "
+            "doesn't, the delay just did its job.\n\n"
+            "<code>/cancelstop</code> to call it off.\n"
+            "<code>/stopnow</code> if this is a real emergency — illness, travel, "
+            "something that can't wait a day.",
+            parse_mode=ParseMode.HTML)
         await self.send_user(
-            "🔴 <b>Your father stopped the system.</b>\n\n"
-            "It stays off until he restarts it. You can't turn it back on yourself "
-            "either — that direction is his too.")
+            f"⏳ <b>Your father agreed to stop it — at {at:%H:%M on %d %b}.</b>\n\n"
+            f"Not now. {hours} hours from now.\n\n"
+            "Everything runs normally until then. If you still want out tomorrow, "
+            "you get out. Most of the time you won't, and that's the whole point "
+            "of the wait.\n\n"
+            "<code>/nevermind</code> if the feeling has already passed.")
+
+    async def cmd_stopnow(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """The emergency door. Deliberately a separate word."""
+        if not self._is_guardian(update):
+            await update.message.reply_text("Only your father can do that.")
+            return
+        reason = update.message.text.partition(" ")[2].strip() or "emergency"
+        self.lock.cancel_stop()
+        self.lock.disable(reason, self.cfg.now())
+        await update.message.reply_text("🔴 Stopped, immediately. /startbot when you want it back.")
+        await self.send_user(
+            "🔴 <b>Your father stopped it immediately.</b>\n\n"
+            "It stays off until he restarts it.")
+
+    async def cmd_cancelstop(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_guardian(update):
+            await update.message.reply_text("Only your father can do that.")
+            return
+        if self.lock.cancel_stop():
+            await update.message.reply_text("✅ Called off. It keeps running.")
+            await self.send_user("Your father called off the stop. It keeps running.")
+        else:
+            await update.message.reply_text("Nothing was scheduled.")
+
+    async def cmd_nevermind(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """You changed your mind during the wait. This one you CAN do."""
+        if not self._is_user(update):
+            return
+        if self.lock.cancel_stop():
+            self.ledger.append("stop_withdrawn_by_user", {})
+            await update.message.reply_text(
+                "Called off. It keeps running.\n\n"
+                "Worth noticing: the feeling passed inside a day. It usually does.")
+            await self.send_guardian(
+                "✅ Ansar withdrew the request to stop. The urge passed. "
+                "Nothing for you to do.")
+        else:
+            await update.message.reply_text("Nothing was scheduled to stop.")
 
     async def cmd_startbot(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
@@ -999,6 +1055,19 @@ class LockstepBot:
             except Exception as exc:                          # noqa: BLE001
                 log.exception("action %s failed: %s", act.kind, exc)
 
+        pend = self.lock.pending_stop()
+        if pend and now >= pend:
+            reason = self.db.lock()["stop_reason"] or ""
+            self.lock.cancel_stop()
+            self.lock.disable(reason, now)
+            await self.send_user(
+                "🔴 <b>The 24 hours are up. It's off.</b>\n\n"
+                "Your father restarts it with /startbot whenever you both want.")
+            await self.send_guardian(
+                f"🔴 The delay has run out and the system has stopped.\n"
+                f"Reason given: <i>{html.escape(reason)}</i>\n\n"
+                "<code>/startbot</code> whenever you want it back.")
+
         try:
             await self._fire_reminders(now)
         except Exception as exc:                              # noqa: BLE001
@@ -1200,6 +1269,8 @@ class LockstepBot:
             ("mute", self.cmd_mute), ("unmute", self.cmd_unmute),
             ("more", self.cmd_more), ("replan", self.cmd_replan),
             ("stopbot", self.cmd_stopbot), ("startbot", self.cmd_startbot),
+            ("stopnow", self.cmd_stopnow), ("cancelstop", self.cmd_cancelstop),
+            ("nevermind", self.cmd_nevermind),
             ("remind", self.cmd_remind), ("reminders", self.cmd_reminders),
             ("forget", self.cmd_forget),
             ("unblock", self.cmd_unblock), ("block", self.cmd_block),

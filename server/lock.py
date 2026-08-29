@@ -74,6 +74,35 @@ class Lock:
             return 0
         return max(0, (date.fromisoformat(row["commitment_end"]) - today).days)
 
+    # -- stopping, on a delay ---------------------------------------------
+    def schedule_stop(self, reason: str, now: datetime, hours: int) -> datetime:
+        """Agree to stop, but not yet.
+
+        This is the one mechanism here with real evidence behind it. An urge is
+        not a decision -- it is a state, and states pass. Almost nobody who
+        wants out at 11pm still wants out at 11pm tomorrow, so a delay costs
+        nothing to the person with a genuine reason and everything to the person
+        with a craving.
+
+        Denial is what you fight. A delay is what you wait through, and waiting
+        is the one thing an urge cannot do.
+        """
+        at = now + timedelta(hours=hours)
+        self.db.set_lock(stop_at=at.isoformat(), stop_reason=reason)
+        self.ledger.append("stop_scheduled", {"at": at.isoformat(), "reason": reason})
+        return at
+
+    def cancel_stop(self) -> bool:
+        if not self.db.lock()["stop_at"]:
+            return False
+        self.db.set_lock(stop_at=None, stop_reason=None)
+        self.ledger.append("stop_cancelled", {})
+        return True
+
+    def pending_stop(self) -> datetime | None:
+        raw = self.db.lock()["stop_at"]
+        return datetime.fromisoformat(raw) if raw else None
+
     # -- state changes -----------------------------------------------------
     def disable(self, reason: str, now: datetime) -> None:
         self.db.set_lock(enabled=0)

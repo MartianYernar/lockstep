@@ -49,6 +49,10 @@ schedule:
   daily_report_at: "22:15"
 
 commitment:
+  # How long a stop waits before taking effect. An urge is a state, not a
+  # decision, and states pass -- so the exit is a delay rather than a wall.
+  # Costs nothing to someone with a real reason; costs everything to a craving.
+  stop_delay_hours: 24
   start: "2026-08-25"       # day one
   months: 3                 # you cannot disable before start + this many months
   total_months: 12          # the full run you're aiming at

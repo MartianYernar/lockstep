@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS lock_state (
     siren_test_until  TEXT,
     muted_until       TEXT,
     apps_open_until   TEXT,
-    apps_opened_at    TEXT
+    apps_opened_at    TEXT,
+    stop_at           TEXT,
+    stop_reason       TEXT
 );
 
 -- "Has this already happened?" for things that must fire exactly once.
@@ -116,7 +118,8 @@ class Database:
                           ("guardian_chat_id", "INTEGER"), ("blocked_since", "TEXT"),
                           ("siren_test_until", "TEXT"),
                           ("muted_until", "TEXT"),
-                          ("apps_open_until", "TEXT"), ("apps_opened_at", "TEXT")):
+                          ("apps_open_until", "TEXT"), ("apps_opened_at", "TEXT"),
+                          ("stop_at", "TEXT"), ("stop_reason", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE lock_state ADD COLUMN {col} {decl}")
         self.conn.commit()
