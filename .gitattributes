@@ -10,3 +10,7 @@ Dockerfile      text eol=lf
 *.service       text eol=lf
 *.jpg   binary
 *.png   binary
+
+# Windows launcher scripts must keep CRLF or cmd/wscript mis-parse them.
+*.bat text eol=crlf
+*.vbs text eol=crlf

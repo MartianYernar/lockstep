@@ -86,8 +86,13 @@ def main() -> None:
     app.post_init = _post_init
     app.post_shutdown = _post_shutdown
 
-    cadence = (f"random spot-checks ~1 per {cfg.spot_avg_min} min"
-               if cfg.mode == "spot_check" else f"every {cfg.interval_min} min")
+    # block_start used to fall through to the "fixed" branch and print
+    # "every 3 min", which is the old every-few-minutes behaviour it replaced.
+    # Reading that in the log on startup is genuinely alarming and wrong.
+    cadence = {
+        "spot_check": f"random spot-checks ~1 per {cfg.spot_avg_min} min",
+        "block_start": "proof at the top of each block",
+    }.get(cfg.mode, f"every {cfg.interval_min} min")
     log.info("lockstep up — window %02d:%02d-%02d:%02d, %s",
              cfg.enforce_start_min // 60, cfg.enforce_start_min % 60,
              cfg.enforce_end_min // 60, cfg.enforce_end_min % 60, cadence)

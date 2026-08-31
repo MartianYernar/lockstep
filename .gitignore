@@ -12,3 +12,4 @@ __pycache__/
 .venv/
 photos/
 tests/fixtures_img/
+lockstep.log
