@@ -94,11 +94,26 @@ class Engine:
         # overrun push bedtime later is how a productivity system quietly turns
         # into a sleep-debt machine. Extra time comes out of something else.
         shift = (row["offset_minutes"] or 0) if row else 0
-        # Sleep is the one thing nothing is allowed to borrow from. Even a
-        # genuine emergency offset stops at the hard end -- past that point the
-        # answer is to sacrifice another task, not the night.
-        end = min(self.cfg.enforce_end_min + shift, self.cfg.hard_end_min)
-        return self.cfg.enforce_start_min, end
+        start = self.cfg.enforce_start_min
+        end = self.cfg.enforce_end_min + shift
+
+        # The plan may reach outside the usual hours -- an hour of work before
+        # school, say. Those blocks carry proof like any other, so the window
+        # stretches to whatever was actually planned. Previously anything
+        # written outside 16:10-22:00 was clamped into the window, landed after
+        # its own end time, and produced no checkpoints at all: the block was
+        # accepted, displayed, and then silently unenforced.
+        blocks = self.db.blocks(day)
+        if blocks:
+            start = min(start, min(b["start_min"] for b in blocks))
+            end = max(end, max(b["end_min"] for b in blocks))
+
+        # Two limits a plan does not get to argue with. Sleep is the one thing
+        # nothing is allowed to borrow from, at either end of the day -- not an
+        # overrun, not an emergency offset, and not an ambitious 4am block.
+        start = max(start, self.cfg.earliest_min)
+        end = min(end, self.cfg.hard_end_min)
+        return start, max(start, end)
 
     def in_window(self, now: datetime) -> bool:
         start, end = self.window(now.date())

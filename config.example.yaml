@@ -29,6 +29,7 @@ gemini:
     - "gemini-3.6-flash"
 
 schedule:
+  earliest: '06:00'      # a plan may reach this early, no earlier
   enforce_start: "16:00"          # proof window opens
   enforce_end:   "22:00"          # proof window closes
 

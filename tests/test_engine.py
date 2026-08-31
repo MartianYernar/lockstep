@@ -252,4 +252,43 @@ for i in range(20):
     n += len([a for a in tick7(t, poll_ago_min=80) if a.kind == "phone_silent"])
 check("throttled, not a flood", n <= 1, True)
 
+print("\n=== a plan may reach outside the usual hours, and is enforced there ===")
+# The point: an hour of work before school is proof-bearing like any other
+# block. It used to be accepted, shown in /today, and then silently never
+# checked, because the window clamped it out of existence.
+import copy as _copy
+from fixtures import RAW as _RAW
+_raw = _copy.deepcopy(_RAW)
+_raw["schedule"].update({"enforce_start": "16:10", "enforce_end": "22:00",
+                         "mode": "block_start", "earliest": "06:00"})
+cfg, db, led, eng, lk = build(_raw)
+day = cfg.today()
+db.ensure_day(day)
+check("window with no plan is the configured one", eng.window(day), (16 * 60 + 10, 22 * 60))
+
+db.replace_blocks(day, [
+    (7 * 60, 8 * 60, "work: pset before school", "work"),
+    (16 * 60 + 10, 22 * 60, "work: essay", "work"),
+])
+check("window stretches back to the early block", eng.window(day)[0], 7 * 60)
+check("window end is unchanged", eng.window(day)[1], 22 * 60)
+check("07:30 now counts as inside the window",
+      eng.in_window(datetime(day.year, day.month, day.day, 7, 30, tzinfo=cfg.tz)), True)
+check("06:30 is still outside it",
+      eng.in_window(datetime(day.year, day.month, day.day, 6, 30, tzinfo=cfg.tz)), False)
+
+built = eng.build_checkpoints(day, datetime(day.year, day.month, day.day, 6, 0, tzinfo=cfg.tz))
+early = db.q("SELECT * FROM checkpoints WHERE date=? AND due_at < ? ORDER BY due_at",
+             (day.isoformat(), f"{day.isoformat()}T09:00:00"))
+check("the early block produces checkpoints", len(early) > 0, True)
+check("first one is at 07:00", early[0]["due_at"][11:16], "07:00")
+check("and it asks for blocker proof", early[0]["kind"], "blocker_toggle")
+
+print("\n=== but sleep is protected at both ends ===")
+db.replace_blocks(day, [(4 * 60, 5 * 60, "work: absurdly early", "work"),
+                        (16 * 60 + 10, 23 * 60 + 30, "work: absurdly late", "work")])
+s, e = eng.window(day)
+check("a 04:00 block cannot drag the day earlier than 06:00", s, 6 * 60)
+check("a 23:30 block cannot push past the hard end 22:20", e, 22 * 60 + 20)
+
 sys.exit(report("ENGINE TESTS"))

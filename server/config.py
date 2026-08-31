@@ -38,6 +38,9 @@ class Config:
     mode: str = "spot_check"
     spot_avg_min: int = 45
     spot_min_gap_min: int = 20
+    # A plan is allowed to reach earlier than the usual start, but not without
+    # limit -- sleep is protected at both ends, not just at night.
+    earliest_min: int = 6 * 60
 
     @classmethod
     def load(cls, path: str | None = None) -> "Config":
@@ -67,6 +70,7 @@ class Config:
             interval_min=int(sched["checkpoint_interval_min"]),
             grace_min=int(sched["grace_min"]),
             hard_end_min=_minutes(sched.get("hard_end", "22:20")),
+            earliest_min=_minutes(sched.get("earliest", "06:00")),
             mode=sched.get("mode", "block_start"),
             spot_avg_min=int(sched.get("spot_check_avg_min", 45)),
             spot_min_gap_min=int(sched.get("spot_check_min_gap_min", 20)),
