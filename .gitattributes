@@ -1,0 +1,12 @@
+# This repo is now edited on Windows and executed on Linux. Without this, a
+# shell script can pick up CRLF and the VPS fails with the unhelpful
+# "bad interpreter: /usr/bin/env bash^M". Force LF on everything that runs.
+* text=auto eol=lf
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+Dockerfile      text eol=lf
+*.service       text eol=lf
+*.jpg   binary
+*.png   binary

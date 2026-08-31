@@ -1,6 +1,12 @@
+# Anything that looks like a config -- .bak, .macos, .vps -- holds a live bot
+# token and Gemini key. Matching only the exact name has bitten this repo once.
 config.yaml
+config.yaml.*
+*.bak
+*.bak.*
+# -wal and -shm are not matched by *.db and they hold real ledger content.
 *.db
-*.db-journal
+*.db-*
 __pycache__/
 *.pyc
 .venv/

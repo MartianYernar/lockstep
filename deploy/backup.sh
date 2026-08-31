@@ -5,10 +5,15 @@
 # Keeps the ledger recoverable. If the database is ever lost or wiped, these
 # snapshots are what let the guardian see the history that existed before.
 set -euo pipefail
-DB="${LOCKSTEP_DB:-/opt/lockstep/data/lockstep.db}"
+# bootstrap.sh puts the data dir at $REPO_DIR/deploy/data (compose mounts ./data
+# from inside deploy/). An earlier default pointed one level up, so the nightly
+# cron failed every night into a log nobody reads -- and these snapshots are the
+# only thing that makes the ledger recoverable after a wipe. Fail loudly instead.
+DB="${LOCKSTEP_DB:-/opt/lockstep/deploy/data/lockstep.db}"
 DEST="${LOCKSTEP_BACKUP_DIR:-/opt/lockstep/backups}"
 KEEP=30
 
+[[ -f "$DB" ]] || { echo "$(date '+%F %T') NO DATABASE AT $DB -- backup did nothing" >&2; exit 1; }
 mkdir -p "$DEST"
 STAMP=$(date +%Y%m%d-%H%M%S)
 # .backup is safe on a live WAL database; cp is not.
