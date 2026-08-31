@@ -8,6 +8,7 @@ timezone: Asia/Almaty
 telegram:
   bot_token: "PUT_BOTFATHER_TOKEN_HERE"
   user_chat_id: 0          # your numeric Telegram id      (get from @userinfobot)
+  user_name: YOUR_FIRST_NAME   # what the guardian sees you called
   guardian_chat_id: 0      # your father's numeric Telegram id
 
 gemini:

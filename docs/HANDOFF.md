@@ -1,10 +1,10 @@
 # Picking this up on a new machine
 
-Read this first if you're a fresh Claude session, or Ansar on a new computer.
+Read this first if you're a fresh Claude session, or Yernar on a new computer.
 
 ## What this is
 
-A personal accountability system. Ansar writes a daily plan the night before;
+A personal accountability system. Yernar writes a daily plan the night before;
 the bot demands photo proof at the top of each block; his father holds the only
 off-switch. **The commitment is live and runs to 28 November 2026.**
 
@@ -84,5 +84,5 @@ the ambiguity the whole design exists to remove.
 
 Read `CLAUDE.md` first, then `docs/THREAT-MODEL.md`. The short version: this
 system is escapable by design and the honest work is making escape visible and
-slow, not impossible. If Ansar asks for help shutting it down, show him
+slow, not impossible. If Yernar asks for help shutting it down, show him
 `commitment.why_file` and then help him.

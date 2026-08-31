@@ -56,7 +56,7 @@ def main() -> None:
             try:
                 await application.bot.send_message(
                     lock.guardian_id(),
-                    "Reminder: Ansar's accountability system is set up and waiting "
+                    f"Reminder: {cfg.user_name}'s accountability system is set up and waiting "
                     "on you.\n\nThere is no password to choose. Send "
                     "<code>/commit 3</code> to start it for three months.\n\n"
                     "From then only you can stop it, with <code>/stopbot</code>.",

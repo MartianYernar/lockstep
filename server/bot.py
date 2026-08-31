@@ -87,7 +87,7 @@ class LockstepBot:
         self.ledger.append("bot_blocked", {"at": now.isoformat()})
         log.warning("user has blocked the bot")
         await self.send_guardian(
-            "🚫 <b>Ansar has blocked the bot on Telegram.</b>\n\n"
+            f"🚫 <b>{self.cfg.user_name} has blocked the bot on Telegram.</b>\n\n"
             "That stops it messaging him, and it needed no password and no reason. "
             "It does not stop the system: his phone alarm runs off the server "
             "directly and will keep going, and his missed checkpoints keep counting.\n\n"
@@ -99,7 +99,7 @@ class LockstepBot:
         self.db.set_lock(blocked_since=None)
         self.ledger.append("bot_unblocked", {"was_blocked_since": since})
         await self.send_guardian(
-            f"✅ Ansar has unblocked the bot. It was blocked since "
+            f"✅ {self.cfg.user_name} has unblocked the bot. It was blocked since "
             f"{datetime.fromisoformat(since):%d %b %H:%M}.")
 
     async def send_guardian(self, text: str, **kw) -> None:
@@ -126,7 +126,7 @@ class LockstepBot:
     async def cmd_start(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self._is_guardian(update) and not self.lock.commitment_active(self.cfg.today()):
             await update.message.reply_text(
-                "You are the guardian for Ansar's accountability system.\n\n"
+                f"You are the guardian for {self.cfg.user_name}'s accountability system.\n\n"
                 "There is no password to set — the system simply does what this "
                 "Telegram account tells it and ignores everyone else, including him.\n\n"
                 "To start it, send:\n\n<code>/commit 3</code>\n\n"
@@ -361,7 +361,7 @@ class LockstepBot:
             f"{end//60:02d}:{end%60:02d}.",
             parse_mode=ParseMode.HTML)
         await self.send_guardian(
-            f"📝 Ansar rewrote the rest of today from "
+            f"📝 {self.cfg.user_name} rewrote the rest of today from "
             f"{minute//60:02d}:{minute%60:02d}. The day still ends at the same time.")
 
     # ======================================================================
@@ -530,7 +530,7 @@ class LockstepBot:
             f"window now runs to {end//60:02d}:{end%60:02d}.\n"
             "That's the only one today.")
         await self.send_guardian(
-            f"⏭ Ansar used today's one-hour offset.\nReason: <i>{html.escape(reason)}</i>")
+            f"⏭ {self.cfg.user_name} used today's one-hour offset.\nReason: <i>{html.escape(reason)}</i>")
 
     # ======================================================================
     # the shutdown request
@@ -610,7 +610,7 @@ class LockstepBot:
         self.pending.pop(update.effective_chat.id, None)
         self.ledger.append("disable_requested", {"reason": reason})
         await self.send_guardian(
-            "⚠️ <b>Ansar is asking to turn the system off.</b>\n\n"
+            f"⚠️ <b>{self.cfg.user_name} is asking to turn the system off.</b>\n\n"
             f"His reason:\n<i>{html.escape(reason)}</i>\n\n"
             "If you agree, send:\n<code>/stopbot</code>\n\n"
             "If you don't, do nothing at all. It stays on. You do not owe him a "
@@ -681,7 +681,7 @@ class LockstepBot:
                 "Called off. It keeps running.\n\n"
                 "Worth noticing: the feeling passed inside a day. It usually does.")
             await self.send_guardian(
-                "✅ Ansar withdrew the request to stop. The urge passed. "
+                f"✅ {self.cfg.user_name} withdrew the request to stop. The urge passed. "
                 "Nothing for you to do.")
         else:
             await update.message.reply_text("Nothing was scheduled to stop.")
@@ -731,7 +731,7 @@ class LockstepBot:
         await update.message.reply_text(f"✅ Guardian registered: <code>{gid}</code>",
                                         parse_mode=ParseMode.HTML)
         await self.send_guardian(
-            "You are the guardian for Ansar's accountability system.\n\n"
+            f"You are the guardian for {self.cfg.user_name}'s accountability system.\n\n"
             "There is no password to set. The system does what this Telegram "
             "account tells it and ignores everyone else, him included.\n\n"
             "To start it, send:\n\n<code>/commit 3</code>\n\nfor three months.")
@@ -1118,7 +1118,7 @@ class LockstepBot:
                                           getattr(chat, "last_name", "")])) or "unknown"
             self.seen_strangers[chat.id] = name
             await update.message.reply_text(
-                "You're not registered with this bot yet. Ansar has been told you "
+                f"You're not registered with this bot yet. {self.cfg.user_name} has been told you "
                 "messaged — he'll add you.")
             await self.send_user(
                 f"👤 <b>{html.escape(name)}</b> just messaged the bot "
@@ -1285,7 +1285,7 @@ class LockstepBot:
                 "Telegram checkpoints carry on regardless — this only affects the siren.")
             if p.get("escalate"):
                 await self.send_guardian(
-                    f"📵 Ansar's phone agent has been silent for {p['minutes']} min "
+                    f"📵 {self.cfg.user_name}'s phone agent has been silent for {p['minutes']} min "
                     "during the enforcement window. Could be a flat battery or a crash; "
                     "could also be switched off. Worth asking.")
 
@@ -1316,7 +1316,7 @@ class LockstepBot:
                 "It keeps running until you decide. Your father can send /extend 3 "
                 "for another three months, or you can /disable — no password needed now.")
             await self.send_guardian(
-                "🏁 The commitment period Ansar signed up for has ended.\n\n"
+                f"🏁 The commitment period {self.cfg.user_name} signed up for has ended.\n\n"
                 "Send <code>/extend 3</code> to carry on for another three months, "
                 "or let him stop.")
 

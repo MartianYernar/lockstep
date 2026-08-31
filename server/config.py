@@ -85,6 +85,16 @@ class Config:
         return int(self.raw["telegram"]["user_chat_id"])
 
     @property
+    def user_name(self) -> str:
+        """What the guardian sees him called.
+
+        It used to be hardcoded in eleven places in bot.py, which meant the
+        guardian was reading a name that came from whoever wrote the file
+        rather than from the person using it.
+        """
+        return str(self.raw["telegram"].get("user_name") or "He")
+
+    @property
     def guardian_chat_id(self) -> int:
         return int(self.raw["telegram"]["guardian_chat_id"])
 

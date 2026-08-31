@@ -1,6 +1,6 @@
 # Working on Lockstep
 
-This is a personal accountability system Ansar built to hold himself to a daily
+This is a personal accountability system Yernar built to hold himself to a daily
 plan for 92 days (started 28 Aug 2026, ends 28 Nov 2026). His father holds the
 only off-switch.
 
