@@ -165,3 +165,6 @@ api:
   host: "0.0.0.0"
   port: 8765
   token: "CHANGE_ME_TO_A_LONG_RANDOM_STRING"
+goals:
+  min: 3          # fewest goals a day may have
+  max: 5          # more than this is a wish list, not priorities

@@ -156,8 +156,10 @@ class LockstepBot:
             return
         await update.message.reply_text(
             "<b>Commands</b>\n"
+            "/goals — the 3-5 things tomorrow is for. Comes before the plan\n"
+            "/done 2 — tick one of them off\n"
             "/plan — write the plan for the next day\n"
-            "/today — today's plan and where you stand\n"
+            "/today — today's goals, plan, and where you stand\n"
             "/status — system state and days remaining\n"
             "/more 30 — the task you're on needs longer; takes time from later\n"
             "/replan — rewrite the rest of today; the end time stays fixed\n"
@@ -228,6 +230,102 @@ class LockstepBot:
             return f"🟡 quiet for {int(gap)} min"
         return f"🔴 silent for {int(gap // 60)}h — the siren is dead"
 
+    # ======================================================================
+    # the day's few things that matter
+    # ======================================================================
+    def _goal_conf(self) -> tuple[int, int]:
+        g = self.cfg.raw.get("goals", {}) or {}
+        return int(g.get("min", 3)), int(g.get("max", 5))
+
+    def _goals_text(self, day: date) -> str | None:
+        rows = self.db.goals(day)
+        if not rows:
+            return None
+        return "\n".join(
+            f"{'✅' if r['done'] else '▫️'} <b>{r['idx']}.</b> {html.escape(r['text'])}"
+            for r in rows)
+
+    async def cmd_goals(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """The 3-4 things the day is actually for, written before the timetable.
+
+        A plan says where the hours go. It does not say what they were for, and
+        without that a day can be fully compliant and still worth nothing.
+        """
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        target = self.target_plan_date(now)
+        lo, hi = self._goal_conf()
+
+        lines = update.message.text.splitlines()
+        head = lines[0].partition(" ")[2].strip()
+        tail = "\n".join(lines[1:]).strip()
+        body = "\n".join(x for x in (head, tail) if x)
+
+        if not body:
+            # No argument: show today's if we have them, otherwise ask.
+            existing = self._goals_text(now.date())
+            if existing:
+                await update.message.reply_text(
+                    f"<b>Goals for {now.date():%A %d %B}</b>\n\n{existing}\n\n"
+                    "<code>/done 2</code> to tick one off.",
+                    parse_mode=ParseMode.HTML)
+                return
+            self.pending[update.effective_chat.id] = {"action": "goals", "date": target}
+            await update.message.reply_text(
+                f"What are the <b>{lo}-{hi} things</b> {target:%A %d %B} is for?\n\n"
+                "One per line. Not a timetable — the outcomes you'd be glad you got:\n\n"
+                "<code>finish linear algebra pset ch3\n"
+                "first draft of the essay, any quality\n"
+                "gym, legs</code>",
+                parse_mode=ParseMode.HTML)
+            return
+        await self._accept_goals(update, target, body)
+
+    async def _accept_goals(self, update: Update, target: date, text: str) -> None:
+        lo, hi = self._goal_conf()
+        items = [l.strip(" -•\t").strip() for l in text.splitlines()]
+        items = [i for i in items if i]
+        if len(items) < lo:
+            await update.message.reply_text(
+                f"That's {len(items)}. Write at least <b>{lo}</b> — "
+                "fewer than that isn't a day's worth of intent.",
+                parse_mode=ParseMode.HTML)
+            return
+        if len(items) > hi:
+            await update.message.reply_text(
+                f"That's {len(items)}. Keep it to <b>{hi}</b> or fewer.\n\n"
+                "More than that isn't priorities, it's a wish list — and it "
+                "guarantees you end the day having missed most of them.",
+                parse_mode=ParseMode.HTML)
+            return
+        self.db.ensure_day(target)
+        self.db.set_goals(target, items)
+        self.ledger.append("goals_set", {"date": target.isoformat(), "count": len(items)})
+        self.pending.pop(update.effective_chat.id, None)
+        await update.message.reply_text(
+            f"<b>{target:%A %d %B} is for:</b>\n\n{self._goals_text(target)}\n\n"
+            "Now the timetable — /plan.",
+            parse_mode=ParseMode.HTML)
+
+    async def cmd_done(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        today = self.cfg.now().date()
+        parts = update.message.text.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await update.message.reply_text("Use: /done 2   (the goal's number)")
+            return
+        if not self.db.mark_goal(today, int(parts[1]), True):
+            await update.message.reply_text("No goal with that number today. /goals to see them.")
+            return
+        self.ledger.append("goal_done", {"date": today.isoformat(), "idx": int(parts[1])})
+        rows = self.db.goals(today)
+        hit = sum(1 for r in rows if r["done"])
+        await update.message.reply_text(
+            f"{self._goals_text(today)}\n\n<b>{hit}/{len(rows)}</b>",
+            parse_mode=ParseMode.HTML)
+
     async def cmd_plan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
             return
@@ -250,6 +348,18 @@ class LockstepBot:
 
     async def _accept_plan(self, update: Update, target: date, text: str) -> None:
         now = self.cfg.now()
+        # Goals before timetable, deliberately. Writing the hours first turns
+        # the day into a shape to be filled; writing the outcomes first makes
+        # the timetable answer to something.
+        if not self.db.goals(target):
+            lo, hi = self._goal_conf()
+            self.pending[update.effective_chat.id] = {"action": "goals", "date": target}
+            await update.message.reply_text(
+                f"Goals first. What are the <b>{lo}-{hi} things</b> "
+                f"{target:%A %d %B} is for?\n\n"
+                "One per line, then send the plan again.",
+                parse_mode=ParseMode.HTML)
+            return
         start, end = self.cfg.enforce_start_min, self.cfg.enforce_end_min
         try:
             blocks = planner.parse(text)
@@ -478,8 +588,12 @@ class LockstepBot:
         blocks = [planner.Block(b["start_min"], b["end_min"], b["label"], b["category"])
                   for b in self.db.blocks(today)]
         sc = self.engine.score(today, now)
+        goals = self._goals_text(today)
+        head = f"<b>{today:%A %d %B}</b>\n\n"
+        if goals:
+            head += f"<b>Today is for:</b>\n{goals}\n\n"
         await update.message.reply_text(
-            f"<b>{today:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n"
+            f"{head}{planner.render(blocks)}\n\n"
             f"✅ {sc['hit']}  ❌ {sc['missed']}  ⏭ {sc['excused']}  "
             f"— {sc['hit']}/{sc['due']} so far ({sc['pct']}%)",
             parse_mode=ParseMode.HTML)
@@ -1090,6 +1204,9 @@ class LockstepBot:
         pend = self.pending.get(chat, {})
         action = pend.get("action")
 
+        if action == "goals":
+            await self._accept_goals(update, pend["date"], text)
+            return
         if action == "plan":
             await self._accept_plan(update, pend["date"], text)
             return
@@ -1333,6 +1450,17 @@ class LockstepBot:
             f"<code>{bar}</code> {sc['pct']}%",
             f"✅ {sc['hit']}   ❌ {sc['missed']}   ⏭ {sc['excused']}   of {sc['due']} due",
         ]
+        # The photo count says he showed up. The goals say whether it was for
+        # anything. A report with only the first number can look like a good
+        # day that produced nothing.
+        goals = self.db.goals(day)
+        if goals:
+            hit = sum(1 for g in goals if g["done"])
+            lines.append(f"\n<b>Goals {hit}/{len(goals)}</b>")
+            lines += [f"{'✅' if g['done'] else '▫️'} {html.escape(g['text'])}"
+                      for g in goals]
+        else:
+            lines.append("\n▫️ No goals were set for this day.")
         if row and row["offsets_used"]:
             lines.append(f"Offset used: {html.escape(row['offset_reason'] or '')}")
         if not (row and row["plan_locked"]):
@@ -1349,6 +1477,7 @@ class LockstepBot:
         for name, fn in [
             ("start", self.cmd_start), ("help", self.cmd_help), ("status", self.cmd_status),
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
+            ("goals", self.cmd_goals), ("done", self.cmd_done),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),

@@ -33,6 +33,20 @@ CREATE TABLE IF NOT EXISTS blocks (
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_date ON blocks(date);
 
+-- The 3-4 things that actually matter today, written before the timetable.
+-- A plan says where the hours go; it does not say what the day was for. Six
+-- days of history had blocks like "work: analysing" with no way to tell
+-- afterwards whether anything was achieved.
+CREATE TABLE IF NOT EXISTS goals (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    date  TEXT NOT NULL,
+    idx   INTEGER NOT NULL,
+    text  TEXT NOT NULL,
+    done  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(date, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_goals_date ON goals(date);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     date         TEXT NOT NULL,
@@ -159,6 +173,30 @@ class Database:
             [(d, s, e, lbl, cat) for (s, e, lbl, cat) in blocks],
         )
         self.conn.commit()
+
+    # -- the day's few things that matter ------------------------------------
+    def goals(self, day: date) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM goals WHERE date = ? ORDER BY idx",
+                      (day.isoformat(),))
+
+    def set_goals(self, day: date, texts: list[str]) -> None:
+        """Replace the day's goals. Rewriting them resets what was ticked off.
+
+        That is deliberate: if the goals changed, yesterday's ticks were about
+        different goals and carrying them over would flatter the record.
+        """
+        d = day.isoformat()
+        self.run("DELETE FROM goals WHERE date = ?", (d,))
+        self.conn.executemany(
+            "INSERT INTO goals (date, idx, text) VALUES (?, ?, ?)",
+            [(d, i, t) for i, t in enumerate(texts, start=1)],
+        )
+        self.conn.commit()
+
+    def mark_goal(self, day: date, idx: int, done: bool = True) -> bool:
+        cur = self.run("UPDATE goals SET done = ? WHERE date = ? AND idx = ?",
+                       (1 if done else 0, day.isoformat(), idx))
+        return cur.rowcount > 0
 
     def claim(self, key: str) -> bool:
         """True exactly once per key, ever. False on every later call."""

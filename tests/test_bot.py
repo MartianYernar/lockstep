@@ -67,12 +67,24 @@ run = asyncio.get_event_loop().run_until_complete
 GOOD = """16:00-19:00 work: linear algebra pset
 19:00-20:00 gym
 20:00-22:00 work: essay draft"""
+GOALS = ["finish linear algebra pset ch3",
+         "first draft of the essay, any quality",
+         "gym, legs"]
+
+
+def goalup(db, bot, cfg):
+    """Goals gate the plan now, so a plan test has to set them first."""
+    t = bot.target_plan_date(cfg.now())
+    db.ensure_day(t)
+    db.set_goals(t, GOALS)
+    return t
 
 print("\n=== /plan: multiline after the command ===")
 cfg, db, led, eng, lk, bot, val = make()
 # Capture the target BEFORE submitting: once today is planned,
 # target_plan_date() correctly rolls forward to tomorrow.
 target = bot.target_plan_date(cfg.now())
+db.ensure_day(target); db.set_goals(target, GOALS)
 u = FakeUpdate("/plan\n" + GOOD)
 run(bot.cmd_plan(u, None))
 check("plan accepted", "Locked in" in u.message.last, True)
@@ -83,6 +95,7 @@ check("target rolls to tomorrow once today is planned",
 
 print("\n=== /plan: gaps are refused with the gap named ===")
 cfg, db, led, eng, lk, bot, val = make()
+goalup(db, bot, cfg)
 u = FakeUpdate("/plan\n16:00-17:00 work\n18:00-22:00 relax")
 run(bot.cmd_plan(u, None))
 check("refused", u.message.last.startswith("❌"), True)
@@ -91,6 +104,7 @@ check("nothing was stored", len(db.blocks(bot.target_plan_date(cfg.now()))), 0)
 
 print("\n=== /plan: bare command prompts, then the next message is the plan ===")
 cfg, db, led, eng, lk, bot, val = make()
+goalup(db, bot, cfg)
 u1 = FakeUpdate("/plan")
 run(bot.cmd_plan(u1, None))
 check("prompts for the plan", "one block per line" in u1.message.last, True)
@@ -228,6 +242,7 @@ import server.config as _c
 real_now = cfg.now
 cfg.now = lambda: datetime.combine(today, datetime.min.time(),
                                    tzinfo=cfg.tz).replace(hour=18, minute=56)
+goalup(db, bot, cfg)
 u = FakeUpdate("/plan\n16:00-19:00 work: linear algebra pset\n19:00-22:00 work: essay")
 run(bot.cmd_plan(u, None))
 msg = u.message.last
@@ -414,5 +429,66 @@ cfg.now = lambda: evening
 u = FakeUpdate("/more 30")
 run(bot.cmd_more(u, None))
 check("refused outside the window", "isn't open" in u.message.last, True)
+
+
+
+
+print("\n=== goals gate the plan: timetable without intent is refused ===")
+cfg, db, led, eng, lk, bot, val = make()
+target = bot.target_plan_date(cfg.now())
+u = FakeUpdate("/plan\n" + GOOD)
+run(bot.cmd_plan(u, None))
+check("plan refused with no goals", "Goals first" in u.message.last, True)
+check("nothing stored", len(db.blocks(target)), 0)
+check("now waiting for goals", bot.pending[USER]["action"], "goals")
+
+u2 = FakeUpdate("finish pset ch3\nessay draft\ngym")
+run(bot.on_text(u2, None))
+check("goals accepted", len(db.goals(target)), 3)
+check("pending cleared", USER in bot.pending, False)
+check("told to send the plan next", "/plan" in u2.message.last, True)
+
+u3 = FakeUpdate("/plan\n" + GOOD)
+run(bot.cmd_plan(u3, None))
+check("plan now accepted", "Locked in" in u3.message.last, True)
+
+print("\n=== too few and too many are both refused ===")
+cfg, db, led, eng, lk, bot, val = make()
+t = bot.target_plan_date(cfg.now())
+u = FakeUpdate("/goals\nonly one thing")
+run(bot.cmd_goals(u, None))
+check("one goal refused", "at least" in u.message.last, True)
+check("nothing stored", len(db.goals(t)), 0)
+
+u = FakeUpdate("/goals\na\nb\nc\nd\ne\nf")
+run(bot.cmd_goals(u, None))
+check("six goals refused", "wish list" in u.message.last, True)
+check("still nothing stored", len(db.goals(t)), 0)
+
+print("\n=== /done ticks one off and the report carries it ===")
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+db.ensure_day(today); db.set_goals(today, GOALS)
+u = FakeUpdate("/done 2")
+run(bot.cmd_done(u, None))
+check("marked done", [g["done"] for g in db.goals(today)], [0, 1, 0])
+check("shows the tally", "1/3" in u.message.last, True)
+
+u = FakeUpdate("/done 9")
+run(bot.cmd_done(u, None))
+check("out-of-range is refused", "No goal with that number" in u.message.last, True)
+
+rep = bot._report_text(today)
+check("report names the goals", "first draft of the essay" in rep, True)
+check("report carries the tally", "Goals 1/3" in rep, True)
+
+print("\n=== rewriting goals clears stale ticks ===")
+db.set_goals(today, ["a different plan entirely", "second thing", "third thing"])
+check("ticks reset with the goals", [g["done"] for g in db.goals(today)], [0, 0, 0])
+
+print("\n=== a day with no goals says so in the report ===")
+cfg, db, led, eng, lk, bot, val = make()
+check("report is explicit about it", "No goals were set" in bot._report_text(cfg.today()), True)
+
 
 sys.exit(report("BOT TESTS"))
