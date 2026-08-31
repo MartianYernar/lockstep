@@ -64,6 +64,8 @@ def main() -> None:
             except Exception as exc:                          # noqa: BLE001
                 log.error("could not reach guardian: %s", exc)
 
+        await bot.publish_command_menu(application)
+
         from aiohttp import web
         runner = web.AppRunner(build_app(cfg, engine, ledger))
         await runner.setup()

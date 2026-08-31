@@ -491,4 +491,38 @@ cfg, db, led, eng, lk, bot, val = make()
 check("report is explicit about it", "No goals were set" in bot._report_text(cfg.today()), True)
 
 
+print("\n=== buttons: tapping beats typing ===")
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
+today = cfg.today()
+db.ensure_day(today); db.set_goals(today, GOALS)
+
+
+def keys(markup):
+    return [b.text for row in markup.keyboard for b in row]
+
+
+u = FakeUpdate("/done")
+run(bot.cmd_done(u, None))
+check("bare /done lists the goals instead of scolding", "linear algebra" in u.message.last, True)
+
+kb = bot._goal_buttons(today)
+check("one button per open goal", len(kb.inline_keyboard), 3)
+check("button carries the goal index", kb.inline_keyboard[0][0].callback_data, "done:1")
+
+db.mark_goal(today, 1); db.mark_goal(today, 2); db.mark_goal(today, 3)
+check("no buttons left once all are ticked", bot._goal_buttons(today), None)
+
+check("user keyboard offers /goals", "/goals" in keys(bot._keyboard(FakeUpdate("/help"))), True)
+gk = keys(bot._keyboard(FakeUpdate("/help", chat_id=GUARDIAN)))
+check("guardian keyboard offers /report", "/report" in gk, True)
+check("guardian is not offered /plan — it isn't his", "/plan" in gk, False)
+
+print("\n=== /done on a day with no goals doesn't offer an empty keyboard ===")
+cfg, db, led, eng, lk, bot, val = make()
+u = FakeUpdate("/done")
+run(bot.cmd_done(u, None))
+check("says there is nothing to tick", "No goals set" in u.message.last, True)
+check("no keyboard built", bot._goal_buttons(cfg.today()), None)
+
 sys.exit(report("BOT TESTS"))

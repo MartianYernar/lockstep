@@ -7,11 +7,12 @@ import os
 import pathlib
 from datetime import date, datetime, timedelta
 
-from telegram import Update
+from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton,
+                      InlineKeyboardMarkup, ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.error import Forbidden
-from telegram.ext import (Application, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes, MessageHandler, filters)
 
 from . import images, planner, reminders
 from .config import _hhmm
@@ -123,6 +124,82 @@ class LockstepBot:
     # ======================================================================
     # user commands
     # ======================================================================
+    # ======================================================================
+    # buttons
+    #
+    # Typing /goals and /plan on a phone every evening is friction in exactly
+    # the wrong place -- the cost should sit on skipping the work, not on
+    # reporting it. These are plain reply keyboards: tapping one sends the same
+    # text you would have typed, so every existing handler works unchanged.
+    # ======================================================================
+    USER_KEYS = [["/today", "/goals"], ["/plan", "/done"], ["/status", "/help"]]
+    GUARDIAN_KEYS = [["/report", "/status"], ["/pause 24 ", "/resume"], ["/help"]]
+
+    def _keyboard(self, update: Update) -> ReplyKeyboardMarkup:
+        keys = self.GUARDIAN_KEYS if self._is_guardian(update) else self.USER_KEYS
+        return ReplyKeyboardMarkup(keys, resize_keyboard=True, is_persistent=True)
+
+    async def publish_command_menu(self, app: Application) -> None:
+        """Fill in Telegram's own '/' menu, separately for each side.
+
+        Without a scope the guardian is offered /plan and /offset, which do
+        nothing for him, and never sees /stopbot -- the one command that is
+        actually his.
+        """
+        try:
+            await app.bot.set_my_commands([
+                BotCommand("today", "today's goals, plan and score"),
+                BotCommand("goals", "the 3-5 things tomorrow is for"),
+                BotCommand("done", "tick off a goal"),
+                BotCommand("plan", "write tomorrow's timetable"),
+                BotCommand("status", "system state and days left"),
+                BotCommand("more", "the task needs longer"),
+                BotCommand("replan", "rewrite the rest of today"),
+                BotCommand("offset", "push the day back an hour"),
+                BotCommand("why", "read back your own reasoning"),
+                BotCommand("testsiren", "check the phone alarm works"),
+                BotCommand("help", "all commands"),
+            ])
+            gid = self.lock.guardian_id()
+            if gid:
+                await app.bot.set_my_commands([
+                    BotCommand("report", "today's numbers"),
+                    BotCommand("status", "is it running, days left"),
+                    BotCommand("pause", "pause it — illness, travel"),
+                    BotCommand("resume", "end a pause early"),
+                    BotCommand("stopbot", "agree to stop, 24h from now"),
+                    BotCommand("cancelstop", "call off a scheduled stop"),
+                    BotCommand("extend", "carry on another 3 months"),
+                    BotCommand("help", "all commands"),
+                ], scope=BotCommandScopeChat(chat_id=gid))
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("could not publish the command menu: %s", exc)
+
+    async def on_button(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Inline buttons. Currently only ticking off a goal."""
+        q = update.callback_query
+        await q.answer()
+        if not q.data.startswith("done:"):
+            return
+        today = self.cfg.now().date()
+        idx = int(q.data.split(":", 1)[1])
+        if self.db.mark_goal(today, idx, True):
+            self.ledger.append("goal_done", {"date": today.isoformat(), "idx": idx})
+        rows = self.db.goals(today)
+        hit = sum(1 for r in rows if r["done"])
+        await q.edit_message_text(
+            f"{self._goals_text(today)}\n\n<b>{hit}/{len(rows)}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=self._goal_buttons(today))
+
+    def _goal_buttons(self, day: date) -> InlineKeyboardMarkup | None:
+        left = [g for g in self.db.goals(day) if not g["done"]]
+        if not left:
+            return None
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton(f"✔ {g['text'][:40]}", callback_data=f"done:{g['idx']}")]
+             for g in left])
+
     async def cmd_start(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self._is_guardian(update) and not self.lock.commitment_active(self.cfg.today()):
             await update.message.reply_text(
@@ -132,8 +209,13 @@ class LockstepBot:
                 "To start it, send:\n\n<code>/commit 3</code>\n\n"
                 "for three months. After that it stops by itself and asks whether "
                 "to continue.",
-                parse_mode=ParseMode.HTML)
+                parse_mode=ParseMode.HTML,
+                reply_markup=self._keyboard(update))
             return
+        await update.message.reply_text(
+            "Buttons are below the text box now — you shouldn't have to type "
+            "a command to report that you did the work.",
+            reply_markup=self._keyboard(update))
         await self.cmd_status(update, _ctx)
 
     async def cmd_help(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -152,7 +234,8 @@ class LockstepBot:
                 "/block — close it again\n"
                 "/report — today's numbers on demand\n"
                 "/status — system state",
-                parse_mode=ParseMode.HTML)
+                parse_mode=ParseMode.HTML,
+                reply_markup=self._keyboard(update))
             return
         await update.message.reply_text(
             "<b>Commands</b>\n"
@@ -172,7 +255,8 @@ class LockstepBot:
             "/mute 3 — silence the siren for 3 hours (setup only)\n"
             "/disable — start the shutdown request\n\n"
             "During the window, just send the photo. No command needed.",
-            parse_mode=ParseMode.HTML)
+            parse_mode=ParseMode.HTML,
+            reply_markup=self._keyboard(update))
 
     async def cmd_status(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
@@ -314,7 +398,15 @@ class LockstepBot:
         today = self.cfg.now().date()
         parts = update.message.text.split()
         if len(parts) < 2 or not parts[1].isdigit():
-            await update.message.reply_text("Use: /done 2   (the goal's number)")
+            # Bare /done: don't make him go and look up a number. Show the
+            # goals still open as buttons and let him tap one.
+            goals = self._goals_text(today)
+            if not goals:
+                await update.message.reply_text("No goals set for today. Send /goals.")
+                return
+            await update.message.reply_text(
+                goals, parse_mode=ParseMode.HTML,
+                reply_markup=self._goal_buttons(today))
             return
         if not self.db.mark_goal(today, int(parts[1]), True):
             await update.message.reply_text("No goal with that number today. /goals to see them.")
@@ -1495,6 +1587,7 @@ class LockstepBot:
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:
             app.add_handler(CommandHandler(name, fn))
+        app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(filters.PHOTO, self.on_photo))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.job_queue.run_repeating(self.tick, interval=30, first=10, name="tick")
