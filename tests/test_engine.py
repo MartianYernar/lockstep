@@ -284,6 +284,33 @@ check("the early block produces checkpoints", len(early) > 0, True)
 check("first one is at 07:00", early[0]["due_at"][11:16], "07:00")
 check("and it asks for blocker proof", early[0]["kind"], "blocker_toggle")
 
+print("\n=== a replan does not orphan the checkpoints it leaves behind ===")
+# replace_blocks is DELETE + INSERT, so every rewrite issues fresh block ids.
+# Checkpoints used to keep the old ones and point at rows that no longer
+# existed: no label to ask for, and nothing for the score to attribute to.
+db.replace_blocks(day, [(16 * 60, 18 * 60, "work: physics", "work")])
+eng.build_checkpoints(day, datetime(day.year, day.month, day.day, 15, 0, tzinfo=cfg.tz))
+before = db.q("SELECT id, block_id FROM checkpoints WHERE date=? AND block_id IS NOT NULL",
+              (day.isoformat(),))
+check("checkpoints were attached to the first set of blocks", len(before) > 0, True)
+old_ids = {r["block_id"] for r in before}
+
+db.replace_blocks(day, [(16 * 60, 18 * 60, "work: physics rewritten", "work")])
+new_ids = {b["id"] for b in db.blocks(day)}
+check("the rewrite really did issue new block ids", old_ids & new_ids, set())
+
+live = db.q("SELECT block_id FROM checkpoints WHERE date=? AND block_id IS NOT NULL",
+            (day.isoformat(),))
+check("every checkpoint still points at a block that exists",
+      all(r["block_id"] in new_ids for r in live), True)
+check("none were lost in the move", len(live), len(before))
+
+print("\n=== a checkpoint whose block was planned away is detached, not left dangling ===")
+db.replace_blocks(day, [(20 * 60, 21 * 60, "work: somewhere else entirely", "work")])
+stray = db.q("SELECT block_id FROM checkpoints WHERE date=? AND due_at LIKE ?",
+             (day.isoformat(), f"{day.isoformat()}T16:%"))
+check("16:00 checkpoints no longer claim a block", all(r["block_id"] is None for r in stray), True)
+
 print("\n=== but sleep is protected at both ends ===")
 db.replace_blocks(day, [(4 * 60, 5 * 60, "work: absurdly early", "work"),
                         (16 * 60 + 10, 23 * 60 + 30, "work: absurdly late", "work")])

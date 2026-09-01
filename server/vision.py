@@ -72,6 +72,15 @@ timestamp_text - exactly what that visible time reads, verbatim. "" if none.
 activity_seen - one plain sentence: what is actually happening in the frame.
 activity_match - true if the frame satisfies the requirement above.
   Be reasonable, not gullible. Judge consistency, not proof of effort.
+  A task naming several things -- "stretch and mouth rinse", "shower, skincare"
+  -- is a sequence carried out across the whole block, not a single instant. One
+  photo can only ever show one of them, so a frame consistent with ANY named
+  part is a match. Requiring all of them makes such a block impossible to pass.
+  Judge the posture or the setup, not visible exertion: a still photo cannot
+  show motion. Someone lying on the floor with limbs extended is consistent
+  with stretching; someone at a sink is consistent with brushing or rinsing.
+  Typos in the task are the person's own shorthand, not a reason to refuse --
+  read through them to the obvious intent.
 confidence - 0.0 to 1.0, how sure you are about activity_match.
 reason - one short sentence a person would find fair, addressed to them
   directly. If activity_match is false, say concretely what was missing.

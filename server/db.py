@@ -173,6 +173,31 @@ class Database:
             [(d, s, e, lbl, cat) for (s, e, lbl, cat) in blocks],
         )
         self.conn.commit()
+        self.reattach_checkpoints(day)
+
+    def reattach_checkpoints(self, day: date) -> int:
+        """Re-point existing checkpoints at the rebuilt blocks.
+
+        Blocks are replaced by DELETE + INSERT, which issues fresh autoincrement
+        ids. Every checkpoint that survived a /replan was left pointing at a row
+        that no longer existed, so the bot had no label to ask for and the score
+        could not attribute the check to anything. Matching by time instead of
+        id survives any number of rewrites.
+        """
+        blocks = self.blocks(day)
+        moved = 0
+        for cp in self.q("SELECT id, due_at, block_id FROM checkpoints WHERE date = ?",
+                         (day.isoformat(),)):
+            minute = int(cp["due_at"][11:13]) * 60 + int(cp["due_at"][14:16])
+            b = next((x for x in blocks
+                      if x["start_min"] <= minute < x["end_min"]), None)
+            new_id = b["id"] if b else None
+            if new_id != cp["block_id"]:
+                self.conn.execute("UPDATE checkpoints SET block_id = ? WHERE id = ?",
+                                  (new_id, cp["id"]))
+                moved += 1
+        self.conn.commit()
+        return moved
 
     # -- the day's few things that matter ------------------------------------
     def goals(self, day: date) -> list[sqlite3.Row]:
