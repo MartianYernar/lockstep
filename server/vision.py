@@ -126,8 +126,10 @@ REQUIREMENTS = {
         "A screenshot of {blocker} with a block ACTIVELY RUNNING -- the toggle on,\n"
         "  a timer counting, and the computer's clock visible in the taskbar."),
     "blocker_allow": (
-        "A screenshot of {blocker} showing the list of ALLOWED / permitted websites\n"
-        "  for this block, readable, with the clock visible."),
+        "A screenshot of {blocker} showing what this block COVERS, readable, with\n"
+        "  the clock visible. Any of these settles it: the allowed / permitted\n"
+        "  list, the exceptions list of an allow-only block, or an explicit list\n"
+        "  of blocked sites. One shot, whichever way the block is configured."),
     "blocker_block": (
         "A screenshot of {blocker} showing what this block actually covers, with\n"
         "  the clock visible. Either a readable list of BLOCKED websites, or --\n"
@@ -374,10 +376,16 @@ class Validator:
                 return Verdict(ok=False, failure_code="blocker_off",
                                reason=f"{blocker} is on screen but the block isn't running. "
                                       f"Start it, then screenshot it.", **base)
-            if kind == "blocker_allow" and not base["blocker_allowlist_visible"]:
+            # Either list settles it. The point of this shot is "what does the
+            # block cover", and an allow-only block answers that with its
+            # exceptions while a deny-list answers it with the blocked names.
+            # Demanding one specific tab made a correctly configured block
+            # unpassable.
+            if kind == "blocker_allow" and not (base["blocker_allowlist_visible"]
+                                                or base["blocker_blocklist_visible"]):
                 return Verdict(ok=False, failure_code="no_allowlist",
-                               reason="I can't read the allowed-sites list. Open the block's "
-                                      "details so the list shows.", **base)
+                               reason="I can't see what this block covers. Open the block's "
+                                      "details so its list of sites shows.", **base)
             if kind == "blocker_block" and not base["blocker_blocklist_visible"]:
                 return Verdict(ok=False, failure_code="no_blocklist",
                                reason="I can't read the blocked-sites list. Open the block's "

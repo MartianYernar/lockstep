@@ -38,7 +38,8 @@ OPEN_STATES = ("asked", "overdue")
 # block with an allowlist is evidence about the whole hour rather than a moment.
 PROOF_KINDS = {
     "blocker_toggle": "the blocker running, with the clock visible",
-    "blocker_allow":  "the ALLOWED sites list",
+    "blocker_allow":  "what the block covers — the allowed or blocked list",
+    # No longer generated; kept so checkpoints recorded before the cut resolve.
     "blocker_block":  "the BLOCKED sites list",
     "activity":       "the activity itself",
 }
@@ -209,7 +210,13 @@ class Engine:
             lo = max(b["start_min"], start)
             if lo >= end:
                 continue
-            kinds = ["blocker_toggle", "blocker_allow", "blocker_block"]
+            # Two shots, not three. For an allow-only block the allowed list and
+            # the blocked list are literally the same window, so the third shot
+            # asked for one screen to be photographed twice a minute apart. With
+            # 14 blocks a day that is 14 pointless screenshots, and the load is
+            # what actually breaks this. blocker_block stays defined so older
+            # checkpoints still resolve; it is simply no longer generated.
+            kinds = ["blocker_toggle", "blocker_allow"]
             if not b["label"].lower().startswith("work"):
                 kinds.append("activity")
             for i, kind in enumerate(kinds):
