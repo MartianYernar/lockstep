@@ -383,9 +383,14 @@ class Validator:
             # unpassable.
             if kind == "blocker_allow" and not (base["blocker_allowlist_visible"]
                                                 or base["blocker_blocklist_visible"]):
+                # Name the actual tap. "Open the block's details" sent him round
+                # in circles for an hour: the details WERE open, on a Websites
+                # tab that is empty because the block is allow-only. The list he
+                # needs is one tab across.
                 return Verdict(ok=False, failure_code="no_allowlist",
-                               reason="I can't see what this block covers. Open the block's "
-                                      "details so its list of sites shows.", **base)
+                               reason="I can't see any list of sites. If the Websites tab is "
+                                      "empty, tap Website Exceptions — that's where an "
+                                      "allow-only block keeps its list.", **base)
             if kind == "blocker_block" and not base["blocker_blocklist_visible"]:
                 return Verdict(ok=False, failure_code="no_blocklist",
                                reason="I can't read the blocked-sites list. Open the block's "
