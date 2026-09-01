@@ -14,7 +14,7 @@ from telegram.error import Forbidden
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from . import images, planner, reminders
+from . import images, planner, reminders, vision
 from .config import _hhmm
 from .lock import LockError
 
@@ -1561,6 +1561,12 @@ class LockstepBot:
             lines.append("⚠️ No plan was submitted for this day.")
         if self.db.lock()["blocked_since"]:
             lines.append("🚫 Bot is currently blocked on Telegram.")
+        # The block policy is the one part of this he sets himself, so the guard
+        # is not preventing a change but making one visible: loosen an allowlist
+        # and the fingerprint stops matching the one his father read yesterday.
+        pol = self.cfg.vision.get("blocks") or {}
+        if pol:
+            lines.append(f"Blocks: {len(pol)} · <code>{vision.policy_fingerprint(pol)}</code>")
         lines.append(f"Log: {'intact' if ok else f'⚠️ BROKEN at event {bad}'} · <code>{tip[:12]}</code>")
         return "\n".join(lines)
 

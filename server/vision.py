@@ -15,6 +15,7 @@ you can retry with a clearer shot.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -38,6 +39,9 @@ RESPONSE_SCHEMA = {
         "blocker_allowlist_visible": {"type": "boolean"},
         "blocker_blocklist_visible": {"type": "boolean"},
         "blocker_detail": {"type": "string"},
+        "blocker_block_name": {"type": "string"},
+        "blocker_list_kind": {"type": "string"},
+        "blocker_sites": {"type": "array", "items": {"type": "string"}},
         "face_visible": {"type": "boolean"},
         "identity_visible": {"type": "boolean"},
         "location_revealing": {"type": "boolean"},
@@ -48,9 +52,80 @@ RESPONSE_SCHEMA = {
         "activity_match", "confidence", "reason", "looks_like_screen_of_photo",
         "blocker_visible", "blocker_active", "blocker_allowlist_visible",
         "blocker_blocklist_visible", "blocker_detail",
+        "blocker_block_name", "blocker_list_kind", "blocker_sites",
         "face_visible", "identity_visible", "location_revealing", "privacy_detail",
     ],
 }
+
+def _norm_site(s: str) -> str:
+    """chatgpt.com, https://ChatGPT.com/ and www.chatgpt.com are one site."""
+    s = (s or "").strip().lower()
+    for prefix in ("https://", "http://", "www."):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+    return s.strip().strip("/").split("/")[0]
+
+
+def _norm_sites(raw) -> tuple:
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    seen, out = set(), []
+    for s in raw:
+        n = _norm_site(str(s))
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return tuple(out)
+
+
+def policy_fingerprint(blocks: dict) -> str:
+    """A short hash of the committed block policy.
+
+    Goes in the nightly report. The policy is the one part of this that you set
+    yourself, so the honest guard is not preventing a change but making one
+    visible: loosen a block's allowlist and the fingerprint your father reads
+    tonight stops matching the one he read yesterday.
+    """
+    canon = json.dumps(
+        {str(k): sorted(_norm_sites((v or {}).get("allow", []))) for k, v in sorted((blocks or {}).items())},
+        sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
+
+
+def compare_policy(blocks: dict, name: str, kind: str, sites) -> tuple[bool, str]:
+    """Check a screenshot's site list against what was committed in advance.
+
+    A scope shot on its own proves a list exists, not that it restricts
+    anything: a block permitting everything except one site passes identically
+    to one permitting nothing. The strictness has to be fixed while clear-headed
+    and checked later -- the same principle as the plan itself.
+
+    Returns (ok, reason). Unknown block names pass: the policy is opt-in, and
+    refusing everything not yet listed would make the first day impossible.
+    """
+    if not blocks:
+        return True, ""
+    want = None
+    for k, v in blocks.items():
+        if _norm_site(k) == _norm_site(name) or str(k).strip().lower() == name.strip().lower():
+            want = v or {}
+            break
+    if want is None:
+        return True, ""
+    allowed = set(_norm_sites(want.get("allow", [])))
+    if kind == "block":
+        # A deny-list cannot express "everything else is blocked", so it cannot
+        # satisfy a policy written as an allowlist.
+        return False, ("That block works from a blocked-sites list. The policy for "
+                       f"'{name}' is allow-only — everything blocked except its list.")
+    extra = [s for s in sites if s not in allowed]
+    if extra:
+        return False, (f"'{name}' is permitting {', '.join(extra[:4])}"
+                       f"{' and more' if len(extra) > 4 else ''}, which you did not commit to. "
+                       "Either take it out of the block, or change the policy in config — "
+                       "and that change goes in the log.")
+    return True, ""
+
 
 PROMPT = """You are the verifier for a personal accountability system. Judge ONE photo.
 
@@ -104,6 +179,16 @@ blocker_blocklist_visible - true if the frame makes the SCOPE of the block
   Only say false if the frame shows neither -- you cannot tell what the block
   actually covers.
 blocker_detail - one sentence on what the blocker shows. "" if none visible.
+blocker_block_name - the NAME of the block being shown, copied verbatim from
+  the screen (e.g. "Physics lock in sesh"). "" if no name is readable.
+blocker_list_kind - "allow" if the visible list names sites that are PERMITTED
+  (an allowed / exceptions list), "block" if it names sites that are FORBIDDEN,
+  "" if no list is readable.
+blocker_sites - every site or app named in that visible list, verbatim, as an
+  array of strings. Lower-case them and drop "https://" and "www.". [] if none
+  are readable. Do not invent entries and do not summarise -- if there are
+  twelve, list twelve. This array is compared against what he committed to in
+  advance, so accuracy matters more than tidiness.
 
 Now three privacy fields. The person has asked to be warned about these, so
 judge them strictly -- a false negative here costs them more than a retake:
@@ -152,6 +237,9 @@ class Verdict:
     blocker_allowlist_visible: bool = False
     blocker_blocklist_visible: bool = False
     blocker_detail: str = ""
+    blocker_block_name: str = ""
+    blocker_list_kind: str = ""
+    blocker_sites: tuple = ()
     face_visible: bool = False
     identity_visible: bool = False
     location_revealing: bool = False
@@ -323,6 +411,9 @@ class Validator:
             blocker_allowlist_visible=bool(data.get("blocker_allowlist_visible")),
             blocker_blocklist_visible=bool(data.get("blocker_blocklist_visible")),
             blocker_detail=data.get("blocker_detail", ""),
+            blocker_block_name=(data.get("blocker_block_name") or "").strip(),
+            blocker_list_kind=(data.get("blocker_list_kind") or "").strip().lower(),
+            blocker_sites=_norm_sites(data.get("blocker_sites")),
             face_visible=bool(data.get("face_visible")),
             identity_visible=bool(data.get("identity_visible")),
             location_revealing=bool(data.get("location_revealing")),
@@ -391,6 +482,13 @@ class Validator:
                                reason="I can't see any list of sites. If the Websites tab is "
                                       "empty, tap Website Exceptions — that's where an "
                                       "allow-only block keeps its list.", **base)
+            if kind == "blocker_allow":
+                ok_pol, why = compare_policy(
+                    v.get("blocks") or {}, base["blocker_block_name"],
+                    base["blocker_list_kind"], base["blocker_sites"])
+                if not ok_pol:
+                    return Verdict(ok=False, failure_code="policy_loosened",
+                                   reason=why, **base)
             if kind == "blocker_block" and not base["blocker_blocklist_visible"]:
                 return Verdict(ok=False, failure_code="no_blocklist",
                                reason="I can't read the blocked-sites list. Open the block's "

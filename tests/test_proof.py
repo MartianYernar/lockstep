@@ -85,6 +85,44 @@ check("five blocks", len(db.blocks(DAY)), 5)
 check("12 checkpoints total, down from 17", built["made"], 12)
 print(f"       {built['made']} photos across a 6-hour day, all clustered at 5 moments")
 
+print("\n=== the committed block policy ===")
+# A scope screenshot proves a list exists, not that it restricts anything: a
+# block permitting everything except one site passes identically to one
+# permitting nothing. The strictness is fixed in advance and checked later --
+# the same principle as the plan itself.
+from server.vision import compare_policy, policy_fingerprint, _norm_sites
+POL = {"Physics lock in sesh": {"allow": ["chatgpt.com", "gemini.google.com"]},
+       "Distractions": {"allow": []}}
+
+
+def pol(name, kind, sites):
+    return compare_policy(POL, name, kind, _norm_sites(sites))[0]
+
+
+check("the committed list passes",
+      pol("Physics lock in sesh", "allow", ["chatgpt.com", "gemini.google.com"]), True)
+check("url noise is not a difference",
+      pol("Physics lock in sesh", "allow", ["https://ChatGPT.com/", "www.gemini.google.com"]), True)
+check("stricter than committed is fine",
+      pol("Physics lock in sesh", "allow", ["chatgpt.com"]), True)
+check("LOOSENED: an extra permitted site fails",
+      pol("Physics lock in sesh", "allow", ["chatgpt.com", "youtube.com"]), False)
+check("LOOSENED: block one site and allow the rest fails",
+      pol("Physics lock in sesh", "block", ["youtube.com"]), False)
+check("a block with nothing committed is not policed",
+      pol("Some block I have not listed", "allow", ["anything.com"]), True)
+check("no policy at all polices nothing",
+      compare_policy({}, "Physics lock in sesh", "allow", ("youtube.com",))[0], True)
+
+check("the fingerprint is stable across reorderings",
+      policy_fingerprint(POL),
+      policy_fingerprint({"Distractions": {"allow": []},
+                          "Physics lock in sesh": {"allow": ["gemini.google.com", "chatgpt.com"]}}))
+check("but loosening the policy changes it",
+      policy_fingerprint(POL) == policy_fingerprint(
+          {"Physics lock in sesh": {"allow": ["chatgpt.com", "gemini.google.com", "youtube.com"]},
+           "Distractions": {"allow": []}}), False)
+
 print("\n=== the off switch is real, not just a config key ===")
 # require_blocker_for_work was documented in README and SETUP as the way to
 # turn all of this off, and was referenced nowhere in the code. Flipping it did
