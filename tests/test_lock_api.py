@@ -91,6 +91,26 @@ async def api_tests():
         r = await client.post("/agent/ack", json={"agent": "macos", "opened": 6, "level": 1},
                               headers={"X-Lockstep-Token": "t"})
         check("ack accepted", r.status, 200)
+
+        # The JSON route needs the phone to parse a body, build a dictionary
+        # and test a field. That failed silently on the real phone -- the parse
+        # returns the string "true", the If compares a boolean, nothing fires
+        # and nothing errors. This one is a substring test.
+        r = await client.get("/agent/siren")
+        check("siren needs a token too", r.status, 401)
+        r = await client.get("/agent/siren?token=t")
+        check("plain-text siren -> 200", r.status, 200)
+        check("...and it is text, not json", r.content_type, "text/plain")
+        txt = await r.text()
+        parts = txt.split()
+        check("one line, no braces to parse", "{" in txt, False)
+        check("says one of exactly two things", parts[0] in ("ALARM", "QUIET"), True)
+        if parts[0] == "ALARM":
+            check("...and carries volume and repeats", len(parts), 3)
+            check("both are plain integers",
+                  all(p.isdigit() for p in parts[1:]), True)
+        # The phone only has to ask: does this text start with ALARM.
+        check("a substring test is enough", txt.startswith("ALARM") or txt == "QUIET", True)
 asyncio.run(api_tests())
 
 sys.exit(report("LOCK/API TESTS"))

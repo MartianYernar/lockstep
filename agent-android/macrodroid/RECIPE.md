@@ -22,6 +22,53 @@ Tap **+** under Triggers, search **Regular Interval** *(it lives under Date/Time
   your one-minute interval into fifteen while you sleep, and the siren arrives
   far too late to matter.
 
+## The simple version — use this one
+
+On 1 Sep the JSON macro below fetched correctly every 60 seconds for an hour and
+never made a sound. No error, no clue. The server was sending
+`"phone_alarm": true` the whole time and the phone was throwing it away, which
+from the outside is indistinguishable from a working siren on a day you happen
+not to be behind. `agent_ack` had never once fired, which was the giveaway:
+the HTTP request ran and nothing after it did.
+
+The likely cause is that MacroDroid's **JSON Parse returns the string `"true"`**
+while the If tests a **boolean** — so it never matches. The other candidate is
+**Block next action until complete** being off, which leaves the variable empty.
+Either way the fix is to stop parsing JSON at all.
+
+`GET /agent/siren` answers in one line of plain text:
+
+```
+ALARM 55 10        <- behind: volume 55%, 10 repeats
+QUIET              <- nothing owed
+```
+
+**Three actions, no dictionaries, no parsing:**
+
+1. **HTTP Request** — GET
+   `http://YOUR_SERVER:8765/agent/siren?token=YOUR_API_TOKEN`
+   - Save response to **String** variable `resp`
+   - **Block next action until complete** — ON. Without it `resp` is empty when
+     the next action reads it, and the macro fails silently.
+2. **If** — `resp` **contains** `ALARM`
+3. Inside the If:
+   - **Volume Change** → Stream **Alarm** → 55
+   - **Loop** 10 times: **Play Sound** (Stream **Alarm**, *Block next actions
+     until complete* ON) → **Vibrate** (Long) → **Wait** 2 seconds
+
+That is the whole macro. A substring test cannot fail the way a type comparison
+can.
+
+> **Test it without waiting to fall behind:** send `/testsiren` to the bot. It
+> turns the alarm on for a couple of minutes so you can confirm the phone reacts.
+
+---
+
+## The JSON version (kept for reference)
+
+Richer — it can show the task name in a notification — but it has four steps
+that can each fail quietly. Only use it once the simple one works.
+
 ### Actions
 
 Add these in order. Tap **+** under Actions and search each name.

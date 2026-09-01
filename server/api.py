@@ -62,8 +62,30 @@ def build_app(cfg, engine, ledger) -> web.Application:
         })
         return web.json_response({"ok": True})
 
+    async def siren(request: web.Request) -> web.Response:
+        """The same answer as /agent/state, in one line of plain text.
+
+        The JSON route needs the phone to parse a body into a dictionary and
+        then test a field. That is four steps and it failed silently on the
+        real phone: MacroDroid's JSON Parse hands back the string "true", the
+        If compares it against a boolean, no match, no siren, no error. A macro
+        that fetches correctly and then does nothing is indistinguishable from
+        a working one until the night you need it.
+
+        This is a substring test instead. "ALARM 85 10" or "QUIET".
+        """
+        if not _authorised(request, token):
+            return web.Response(status=401, text="UNAUTHORISED")
+        now = cfg.now()
+        engine.db.set_lock(last_agent_poll=now.isoformat())
+        st = engine.agent_state(now).as_dict()
+        body = (f"ALARM {int(st['alarm_volume_pct'])} {int(st['alarm_repeats'])}"
+                if st["phone_alarm"] else "QUIET")
+        return web.Response(text=body, content_type="text/plain")
+
     app.router.add_get("/health", health)
     app.router.add_get("/agent/state", state)
+    app.router.add_get("/agent/siren", siren)
     app.router.add_post("/agent/ack", ack)
     return app
 
