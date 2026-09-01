@@ -221,7 +221,17 @@ class Engine:
             # photographed one screen twice a minute apart. blocker_block stays
             # defined so older checkpoints resolve; it is no longer generated.
             if bool(self.cfg.vision.get("require_blocker_for_work", False)):
-                kinds = ["blocker_toggle", "blocker_allow"]
+                # One screenshot: the block toggled on and running. The scope
+                # shot is gone. It cost an hour of a school night to three
+                # rounds of wrong guesses about Cold Turkey's UI, and a proof
+                # you cannot reliably produce is worth less than no proof at
+                # all -- it just teaches you to ignore the bot.
+                #
+                # compare_policy in vision.py is kept and tested, unwired. When
+                # a scope shot can be produced without a fight, generate
+                # "blocker_allow" here again and the allowlist check comes back
+                # with it.
+                kinds = ["blocker_toggle"]
                 if not b["label"].lower().startswith("work"):
                     kinds.append("activity")
             else:

@@ -1446,8 +1446,8 @@ class LockstepBot:
             asks = {
                 "blocker_toggle": (
                     f"🔒 <b>{due:%H:%M}</b> — starting: {label}\n\n"
-                    f"<b>Shot 1 of 2.</b> Screenshot {blocker} with the block "
-                    f"<b>running</b> — toggle on, timer going, taskbar clock visible."),
+                    f"Screenshot {blocker} with the block <b>running</b> — "
+                    f"toggle on, timer going, taskbar clock visible."),
                 "blocker_allow": (
                     f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
                     f"<b>Shot 2 of 2.</b> Open the block's details and screenshot "

@@ -57,32 +57,33 @@ for t in sorted(by_time):
 check("no checkpoints once a block is under way", at("16:30") + at("17:00") + at("20:00"), [])
 check("nothing between clusters", at("16:05"), [])
 
-print("\n=== a work block wants two blocker shots, not three ===")
-# It was three until an allow-only block turned out to show its allowed and
-# blocked lists in the same window -- the third shot asked for one screen to be
-# photographed twice, a minute apart, at the top of every block.
+print("\n=== a work block wants one screenshot: the block running ===")
+# It was three, then two, now one. The scope shot went because Cold Turkey's
+# real UI does not present its allowlist the way the validation assumed, and a
+# proof you cannot reliably produce is worth less than no proof at all -- it
+# only teaches you to ignore the bot.
 work = [r["kind"] for r in rows if r["due_at"][11:16] in ("16:00", "16:01", "16:02")]
-check("two shots", work, ["blocker_toggle", "blocker_allow"])
-check("a minute apart", [r["due_at"][11:16] for r in rows[:2]], ["16:00", "16:01"])
-check("the redundant third shot is gone", "blocker_block" in [r["kind"] for r in rows], False)
+check("one shot: the block running", work, ["blocker_toggle"])
+check("no scope shot is demanded", "blocker_allow" in [r["kind"] for r in rows], False)
+check("nor the old third one", "blocker_block" in [r["kind"] for r in rows], False)
 
 print("\n=== a non-work block wants the activity too ===")
 sport = [r["kind"] for r in rows
          if r["due_at"][11:16] in ("18:00", "18:01", "18:02", "18:03")]
-check("three shots for sport", sport, ["blocker_toggle", "blocker_allow", "activity"])
+check("two for sport: the block, then the body", sport, ["blocker_toggle", "activity"])
 shower = [r["kind"] for r in rows
           if r["due_at"][11:16] in ("19:00", "19:01", "19:02", "19:03")]
-check("three for shower too", len(shower), 3)
+check("two for shower too", len(shower), 2)
 check("...and the last one is the activity", shower[-1], "activity")
 
 essay = [r["kind"] for r in rows
          if r["due_at"][11:16] in ("18:30", "18:31", "18:32", "18:33")]
-check("but only two for a work block", len(essay), 2)
+check("but only one for a work block", len(essay), 1)
 check("no activity photo demanded at a screen", "activity" in essay, False)
 
 print("\n=== the day is far quieter than spot checks ===")
 check("five blocks", len(db.blocks(DAY)), 5)
-check("12 checkpoints total, down from 17", built["made"], 12)
+check("7 checkpoints total, down from 17", built["made"], 7)
 print(f"       {built['made']} photos across a 6-hour day, all clustered at 5 moments")
 
 print("\n=== the committed block policy ===")
@@ -141,7 +142,7 @@ made = eng4.build_checkpoints(DAY, BEFORE)
 kinds_off = {r["kind"] for r in eng4.checkpoints(DAY)}
 check("no screenshots demanded at all", kinds_off, {"activity"})
 check("one photo per block, work or not", made["made"], 5)
-check("...which is five, not twelve", made["made"] < built["made"], True)
+check("...still fewer than with screenshots on", made["made"] < built["made"], True)
 
 print("\n=== a plan written late still cannot demand the past ===")
 cfg2, db2, led2, eng2 = make()

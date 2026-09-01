@@ -30,9 +30,20 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
 
 ## The design, in short
 
-- **Proof** happens at the top of each block, not continuously — three Cold
-  Turkey screenshots plus an activity photo for non-`work:` blocks. Constant
-  interruption was raising his stress, which defeats the point.
+- **Proof** happens at the top of each block, not continuously — one Cold Turkey
+  screenshot showing the block running, plus an activity photo for non-`work:`
+  blocks. Constant interruption was raising his stress, which defeats the point.
+  It was three screenshots on 1 Sep and cost an evening: the validation had been
+  written against a description of Cold Turkey's UI rather than the real thing,
+  exactly as SETUP.md warned. If you are tempted to add a shot back, read that
+  warning first. A proof he cannot reliably produce is worth less than no proof
+  — it teaches him to ignore the bot, and then nothing works.
+- **The allowlist check exists but is unwired.** `vision.compare_policy` and
+  `vision.blocks` in config pin what each block may permit, so loosening one
+  fails instead of passing; the nightly report carries a fingerprint of that
+  policy. Nothing generates the `blocker_allow` checkpoint it hangs off. Wire it
+  back in `engine._block_start_times` when a scope shot can be taken without a
+  fight.
 - **No passwords anywhere.** The guardian is a Telegram chat id. Passwords get
   forgotten; this project already lost one that way.
 - **Stopping is a delay, not a wall.** `/stopbot` schedules it 24 hours out.
