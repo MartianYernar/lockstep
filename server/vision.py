@@ -93,8 +93,16 @@ blocker_active - true if that blocker clearly shows a block currently RUNNING:
   merely open, or showing a finished or not-yet-started block, is false.
 blocker_allowlist_visible - true if a list of ALLOWED / permitted / exception
   sites is readable in the frame.
-blocker_blocklist_visible - true if a list of BLOCKED / banned sites is
-  readable in the frame.
+blocker_blocklist_visible - true if the frame makes the SCOPE of the block
+  readable. Two shapes count, and the second is the stricter one:
+    - an explicit list of BLOCKED / banned sites, or
+    - an ALLOW-ONLY block: everything blocked except a named set of exceptions.
+      In that mode the blocked list is legitimately EMPTY, and an empty
+      "Websites" tab beside a populated "Website Exceptions" tab is proof of a
+      total block, not of a missing one. Wording like "Blocked at all times",
+      "No breaks" or "All users" alongside an exceptions list is the same thing.
+  Only say false if the frame shows neither -- you cannot tell what the block
+  actually covers.
 blocker_detail - one sentence on what the blocker shows. "" if none visible.
 
 Now three privacy fields. The person has asked to be warned about these, so
@@ -121,8 +129,11 @@ REQUIREMENTS = {
         "A screenshot of {blocker} showing the list of ALLOWED / permitted websites\n"
         "  for this block, readable, with the clock visible."),
     "blocker_block": (
-        "A screenshot of {blocker} showing the list of BLOCKED websites for this\n"
-        "  block, readable, with the clock visible."),
+        "A screenshot of {blocker} showing what this block actually covers, with\n"
+        "  the clock visible. Either a readable list of BLOCKED websites, or --\n"
+        "  for an allow-only block -- an empty blocked list beside its exceptions,\n"
+        "  which means everything is blocked except those. The second is the\n"
+        "  stronger setup and counts."),
     "activity": (
         "A photograph of the person actually doing the task, with a visible\n"
         "  timestamp. For sport: the body mid-exercise or the equipment in use.\n"
