@@ -28,6 +28,7 @@ def make():
     raw = copy.deepcopy(RAW)
     raw["schedule"]["mode"] = "block_start"
     raw["proof"] = {"shot_gap_min": 1}
+    raw["vision"] = dict(raw["vision"], require_blocker_for_work=True)
     cfg, db, led, eng, lk = build(raw)
     db.set_lock(enabled=1, commitment_end="2099-01-01")
     db.ensure_day(DAY)
@@ -83,6 +84,26 @@ print("\n=== the day is far quieter than spot checks ===")
 check("five blocks", len(db.blocks(DAY)), 5)
 check("12 checkpoints total, down from 17", built["made"], 12)
 print(f"       {built['made']} photos across a 6-hour day, all clustered at 5 moments")
+
+print("\n=== the off switch is real, not just a config key ===")
+# require_blocker_for_work was documented in README and SETUP as the way to
+# turn all of this off, and was referenced nowhere in the code. Flipping it did
+# nothing, which is worse than not having it: it reads as a fix that failed.
+import copy as _c
+_off = _c.deepcopy(RAW)
+_off["schedule"]["mode"] = "block_start"
+_off["proof"] = {"shot_gap_min": 1}
+_off["vision"] = dict(_off["vision"], require_blocker_for_work=False)
+cfg4, db4, led4, eng4, lk4 = build(_off)
+db4.ensure_day(DAY)
+_b = planner.parse(PLAN)
+db4.replace_blocks(DAY, [b.as_tuple() for b in _b])
+db4.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+made = eng4.build_checkpoints(DAY, BEFORE)
+kinds_off = {r["kind"] for r in eng4.checkpoints(DAY)}
+check("no screenshots demanded at all", kinds_off, {"activity"})
+check("one photo per block, work or not", made["made"], 5)
+check("...which is five, not twelve", made["made"] < built["made"], True)
 
 print("\n=== a plan written late still cannot demand the past ===")
 cfg2, db2, led2, eng2 = make()

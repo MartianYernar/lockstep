@@ -282,7 +282,7 @@ early = db.q("SELECT * FROM checkpoints WHERE date=? AND due_at < ? ORDER BY due
              (day.isoformat(), f"{day.isoformat()}T09:00:00"))
 check("the early block produces checkpoints", len(early) > 0, True)
 check("first one is at 07:00", early[0]["due_at"][11:16], "07:00")
-check("and it asks for blocker proof", early[0]["kind"], "blocker_toggle")
+check("and it asks for proof, same as any other block", early[0]["kind"], "activity")
 
 print("\n=== a replan does not orphan the checkpoints it leaves behind ===")
 # replace_blocks is DELETE + INSERT, so every rewrite issues fresh block ids.

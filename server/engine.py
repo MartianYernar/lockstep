@@ -210,15 +210,22 @@ class Engine:
             lo = max(b["start_min"], start)
             if lo >= end:
                 continue
-            # Two shots, not three. For an allow-only block the allowed list and
-            # the blocked list are literally the same window, so the third shot
-            # asked for one screen to be photographed twice a minute apart. With
-            # 14 blocks a day that is 14 pointless screenshots, and the load is
-            # what actually breaks this. blocker_block stays defined so older
-            # checkpoints still resolve; it is simply no longer generated.
-            kinds = ["blocker_toggle", "blocker_allow"]
-            if not b["label"].lower().startswith("work"):
-                kinds.append("activity")
+            # vision.require_blocker_for_work was documented in README and
+            # SETUP as the switch for all of this and was referenced nowhere in
+            # the code -- there was no way to turn it off, only a config key
+            # that looked like one. Off means one activity photo per block, work
+            # or not: a block still has to be proved, just not by screenshot.
+            #
+            # When it is on: two shots, not three. For an allow-only block the
+            # allowed and blocked lists are the same window, so a third shot
+            # photographed one screen twice a minute apart. blocker_block stays
+            # defined so older checkpoints resolve; it is no longer generated.
+            if bool(self.cfg.vision.get("require_blocker_for_work", False)):
+                kinds = ["blocker_toggle", "blocker_allow"]
+                if not b["label"].lower().startswith("work"):
+                    kinds.append("activity")
+            else:
+                kinds = ["activity"]
             for i, kind in enumerate(kinds):
                 minute = lo + i * gap
                 if minute < end and minute < b["end_min"]:
