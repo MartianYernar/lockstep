@@ -26,15 +26,26 @@ Tap **+** under Triggers, search **Regular Interval** *(it lives under Date/Time
 
 On 1 Sep the JSON macro below fetched correctly every 60 seconds for an hour and
 never made a sound. No error, no clue. The server was sending
-`"phone_alarm": true` the whole time and the phone was throwing it away, which
-from the outside is indistinguishable from a working siren on a day you happen
-not to be behind. `agent_ack` had never once fired, which was the giveaway:
-the HTTP request ran and nothing after it did.
+`"phone_alarm": true` the whole time.
 
-The likely cause is that MacroDroid's **JSON Parse returns the string `"true"`**
-while the If tests a **boolean** — so it never matches. The other candidate is
-**Block next action until complete** being off, which leaves the variable empty.
-Either way the fix is to stop parsing JSON at all.
+There are three ways that happens, and they are hard to tell apart from the
+server side, because **the macro reports nothing back** — this recipe has no ack
+step, so `agent_ack` is always zero and tells you nothing:
+
+1. **JSON Parse returns the string `"true"`** and the If tests a boolean, so it
+   never matches and the branch never runs.
+2. **Block next action until complete** is off, so `resp` is still empty when
+   JSON Parse reads it — same outcome.
+3. **The branch does run**, and `data[alarm_volume_pct]` resolves to nothing, so
+   Volume Change sets the alarm stream to **0** and the sound plays silently.
+   This one also quietly zeroes the alarm slider every minute.
+
+**One observation separates them: look at your phone's alarm volume slider
+while the siren should be going.** At 85 the parse worked and the fault is in
+Play Sound. At 0 the branch ran with an unresolved variable — case 3. Unchanged
+means the branch never ran at all — case 1 or 2.
+
+Cases 1 and 2 both disappear if the phone has nothing to parse.
 
 `GET /agent/siren` answers in one line of plain text:
 
