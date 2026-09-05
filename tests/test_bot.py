@@ -491,61 +491,6 @@ cfg, db, led, eng, lk, bot, val = make()
 check("report is explicit about it", "No goals were set" in bot._report_text(cfg.today()), True)
 
 
-print("\n=== the laptop siren: a second surface, so one dead macro isn't fatal ===")
-# The phone was the whole punishment and it went silent for an evening behind a
-# macro that couldn't be reached. This is weaker -- he can mute the laptop --
-# but two things that fail differently beat one that fails completely.
-from server import laptop_siren as _siren
-
-cfg, db, led, eng, lk, bot, val = make()
-fired = []
-
-
-async def _fake_fire(repeats=4):
-    fired.append(repeats)
-
-
-_real_fire, _real_avail = _siren.fire, _siren.available
-_siren.fire, _siren.available = _fake_fire, lambda: True
-
-
-class _Behind:
-    phone_alarm, alarm_repeats = True, 7
-
-
-class _Fine:
-    phone_alarm, alarm_repeats = False, 0
-
-
-_now = cfg.now()
-bot.engine.agent_state = lambda n: _Behind()
-run(bot._laptop_siren(_now))
-check("sounds when behind", fired, [7])
-check("takes its repeat count from the same state the phone reads", fired[0], 7)
-
-run(bot._laptop_siren(_now))
-check("throttled to once a minute", len(fired), 1)
-
-run(bot._laptop_siren(_now + timedelta(minutes=1)))
-check("but sounds again the next minute", len(fired), 2)
-
-fired.clear()
-bot.engine.agent_state = lambda n: _Fine()
-run(bot._laptop_siren(_now + timedelta(minutes=2)))
-check("silent when nothing is owed", fired, [])
-
-bot.engine.agent_state = lambda n: _Behind()
-bot.cfg.raw["escalation"]["laptop_siren"] = False
-run(bot._laptop_siren(_now + timedelta(minutes=3)))
-check("and the config can switch it off", fired, [])
-bot.cfg.raw["escalation"]["laptop_siren"] = True
-
-_siren.available = lambda: False
-run(bot._laptop_siren(_now + timedelta(minutes=4)))
-check("does nothing at all off Windows — the VPS never sees this", fired, [])
-
-_siren.fire, _siren.available = _real_fire, _real_avail
-
 print("\n=== buttons: tapping beats typing ===")
 cfg, db, led, eng, lk, bot, val = make()
 bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN

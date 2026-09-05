@@ -14,7 +14,7 @@ from telegram.error import Forbidden
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from . import images, laptop_siren, planner, reminders, vision
+from . import images, planner, reminders, vision
 from .config import _hhmm
 from .lock import LockError
 
@@ -1346,28 +1346,6 @@ class LockstepBot:
     # ======================================================================
     # the tick
     # ======================================================================
-    async def _laptop_siren(self, now: datetime) -> None:
-        """Second enforcement surface, on the machine he is actually sitting at.
-
-        The phone was the whole punishment and it went silent for an evening
-        behind a macro that could not be reached. Weaker than the phone -- he
-        can mute this, and it only reaches him at the desk -- but two things
-        that fail differently beat one thing that fails completely.
-
-        Throttled to once a minute, matching the phone, and driven by the same
-        agent_state the phone reads, so there is one definition of "behind".
-        """
-        if not laptop_siren.available():
-            return
-        if not self.cfg.esc.get("laptop_siren", True):
-            return
-        st = self.engine.agent_state(now)
-        if not st.phone_alarm:
-            return
-        if not self.db.claim(f"laptop_siren:{now:%Y-%m-%dT%H:%M}"):
-            return
-        await laptop_siren.fire(int(st.alarm_repeats))
-
     async def tick(self, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
         try:
@@ -1382,7 +1360,6 @@ class LockstepBot:
             except Exception as exc:                          # noqa: BLE001
                 log.exception("action %s failed: %s", act.kind, exc)
 
-        await self._laptop_siren(now)
 
         pend = self.lock.pending_stop()
         if pend and now >= pend:
