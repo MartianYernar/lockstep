@@ -488,8 +488,17 @@ class LockstepBot:
                      "you can't photograph the past.)")
         if built["first"]:
             tail += f"\nFirst photo at <b>{datetime.fromisoformat(built['first']):%H:%M}</b>."
+        elif target > now.date():
+            tail += f"\nNothing to check yet — this plan starts on {target:%A}."
         else:
-            tail += "\nNothing left today — this plan starts tomorrow."
+            # A plan for today whose blocks have all already started produces
+            # nothing checkable, and the old wording ("this plan starts
+            # tomorrow") said the opposite of the truth: it is today's plan and
+            # tomorrow still needs its own. Accepting it silently let him think
+            # the evening was covered when nothing at all would be asked.
+            tail += ("\n⚠️ <b>Every block already started, so nothing can be checked "
+                     "today.</b>\nTo cover the rest of today, send /replan with blocks "
+                     "from now to the end of the day.")
 
         await update.message.reply_text(
             f"✅ Locked in for <b>{target:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n{tail}",
