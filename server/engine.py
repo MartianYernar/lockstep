@@ -231,9 +231,15 @@ class Engine:
                 # a scope shot can be produced without a fight, generate
                 # "blocker_allow" here again and the allowlist check comes back
                 # with it.
-                kinds = ["blocker_toggle"]
-                if not b["label"].lower().startswith("work"):
-                    kinds.append("activity")
+                # Exactly one photo per block, and which one depends only on
+                # whether the block is `work:`. A work block happens at a
+                # screen, so the blocker running is the evidence; anything else
+                # happens in the room, so a photo of it is. Asking a non-work
+                # block for both meant a gym block wanted a screenshot of a
+                # website blocker, which proves nothing about a gym block.
+                kinds = (["blocker_toggle"]
+                         if b["label"].lower().startswith("work")
+                         else ["activity"])
             else:
                 kinds = ["activity"]
             for i, kind in enumerate(kinds):

@@ -67,14 +67,14 @@ check("one shot: the block running", work, ["blocker_toggle"])
 check("no scope shot is demanded", "blocker_allow" in [r["kind"] for r in rows], False)
 check("nor the old third one", "blocker_block" in [r["kind"] for r in rows], False)
 
-print("\n=== a non-work block wants the activity too ===")
+print("\n=== a non-work block wants the activity, and only that ===")
 sport = [r["kind"] for r in rows
          if r["due_at"][11:16] in ("18:00", "18:01", "18:02", "18:03")]
-check("two for sport: the block, then the body", sport, ["blocker_toggle", "activity"])
+check("sport wants the body, not a website blocker", sport, ["activity"])
 shower = [r["kind"] for r in rows
           if r["due_at"][11:16] in ("19:00", "19:01", "19:02", "19:03")]
-check("two for shower too", len(shower), 2)
-check("...and the last one is the activity", shower[-1], "activity")
+check("one for shower too", len(shower), 1)
+check("...and it is the activity", shower[-1], "activity")
 
 essay = [r["kind"] for r in rows
          if r["due_at"][11:16] in ("18:30", "18:31", "18:32", "18:33")]
@@ -83,7 +83,7 @@ check("no activity photo demanded at a screen", "activity" in essay, False)
 
 print("\n=== the day is far quieter than spot checks ===")
 check("five blocks", len(db.blocks(DAY)), 5)
-check("7 checkpoints total, down from 17", built["made"], 7)
+check("5 checkpoints total, one per block, down from 17", built["made"], 5)
 print(f"       {built['made']} photos across a 6-hour day, all clustered at 5 moments")
 
 print("\n=== the committed block policy ===")
@@ -142,7 +142,7 @@ made = eng4.build_checkpoints(DAY, BEFORE)
 kinds_off = {r["kind"] for r in eng4.checkpoints(DAY)}
 check("no screenshots demanded at all", kinds_off, {"activity"})
 check("one photo per block, work or not", made["made"], 5)
-check("...still fewer than with screenshots on", made["made"] < built["made"], True)
+check("...the same count either way now: one photo per block", made["made"], built["made"])
 
 print("\n=== a plan written late still cannot demand the past ===")
 cfg2, db2, led2, eng2 = make()
