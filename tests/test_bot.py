@@ -491,6 +491,60 @@ cfg, db, led, eng, lk, bot, val = make()
 check("report is explicit about it", "No goals were set" in bot._report_text(cfg.today()), True)
 
 
+print("\n=== /latenight is a weekly budget, not an excuse on tap ===")
+# This breaks a rule the README states in bold. It is broken narrowly on
+# purpose: once every seven days, needing a photo, and the guardian is told.
+cfg, db, led, eng, lk, bot, val = make()
+bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
+today = cfg.today()
+
+u = FakeUpdate("/latenight")
+run(bot.cmd_latenight(u, None))
+check("a bare command is refused", "What for?" in u.message.last, True)
+
+u = FakeUpdate("/latenight busy")
+run(bot.cmd_latenight(u, None))
+check("a two-word reason is refused too", "What for?" in u.message.last, True)
+
+u = FakeUpdate("/latenight hackathon submission is due at midnight")
+run(bot.cmd_latenight(u, None))
+check("a real reason asks for the photo", "the photo" in u.message.last, True)
+check("and waits for it", bot.pending[USER]["action"], "latenight_photo")
+_row = db.day(today)
+check("nothing granted yet — a reason alone buys nothing",
+      int(_row["bed_offset_minutes"] or 0) if _row else 0, 0)
+
+# Granting it directly; the photo path is exercised by the vision stub elsewhere.
+db.ensure_day(today)
+db.run("UPDATE days SET bed_offset_minutes=120, bed_reason=? WHERE date=?",
+       ("hackathon", today.isoformat()))
+check("bedtime moved by two hours",
+      int((eng.bed_due(today) - cfg.at(today, 22 * 60 + 20)).total_seconds() // 60), 120)
+
+u = FakeUpdate("/latenight another one please tonight")
+run(bot.cmd_latenight(u, None))
+check("twice in one night is refused", "already used it tonight" in u.message.last.lower(), True)
+
+print("\n=== and it stays used for the whole week ===")
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+db.ensure_day(today - timedelta(days=3))
+db.run("UPDATE days SET bed_offset_minutes=120 WHERE date=?",
+       ((today - timedelta(days=3)).isoformat(),))
+u = FakeUpdate("/latenight friends are still out and about")
+run(bot.cmd_latenight(u, None))
+check("3 days later: refused", "once every 7 days" in u.message.last, True)
+check("...and told when it comes back", "next one on" in u.message.last, True)
+
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+db.ensure_day(today - timedelta(days=8))
+db.run("UPDATE days SET bed_offset_minutes=120 WHERE date=?",
+       ((today - timedelta(days=8)).isoformat(),))
+u = FakeUpdate("/latenight friends are still out and about")
+run(bot.cmd_latenight(u, None))
+check("8 days later: allowed again", bot.pending[USER]["action"], "latenight_photo")
+
 print("\n=== buttons: tapping beats typing ===")
 cfg, db, led, eng, lk, bot, val = make()
 bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN

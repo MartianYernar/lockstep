@@ -43,7 +43,7 @@ planner.validate_coverage(blocks, 16*60, 22*60)
 db.replace_blocks(DAY, [b.as_tuple() for b in blocks])
 db.run("UPDATE days SET plan_locked=1, plan_submitted_at=? WHERE date=?", (T(15,0).isoformat(), DAY.isoformat()))
 n = eng.build_checkpoints(DAY, T(15, 59))["made"]
-check("checkpoints for 16:00-22:00 @15min", n, 24)
+check("checkpoints for 16:00-22:00 @15min, plus the bed photo", n, 25)
 check("debt cleared once planned", eng.debt_seconds(DAY, T(16, 30)), 0)
 
 print("\n=== 3. asking + grace ===")
@@ -83,7 +83,10 @@ check("one hit recorded", sc["hit"], 1)
 
 print("\n=== 6. outside window is always idle ===")
 check("15:59 idle", eng.agent_state(T(15, 59)).active, False)
-check("22:30 idle", eng.agent_state(T(22, 30)).active, False)
+# 22:30 is no longer idle: bedtime is 22:20 and the bed photo is owed.
+check("22:30 is bedtime, not idle", eng.agent_state(T(22, 30)).active, True)
+check("...and it says so", "bed" in eng.agent_state(T(22, 30)).headline.lower(), True)
+check("02:00 is past the cutoff, so quiet again", eng.agent_state(T(2, 0)).active, False)
 
 print("\n=== 7. offset shifts the day ===")
 before_end = eng.window(DAY)[1]
@@ -97,9 +100,11 @@ _cps = eng.checkpoints(DAY)
 _last = max(datetime.fromisoformat(c["due_at"]) for c in _cps)
 check("checkpoints reach the extended window", _last.hour * 60 + _last.minute >= 22*60, True)
 check("no duplicate due times", len({c["due_at"] for c in _cps}), len(_cps))
-check("nothing scheduled past the new window end",
+# The bed photo is deliberately after the window shuts, so exclude it here.
+check("no block checkpoint scheduled past the window end",
       max(datetime.fromisoformat(c["due_at"]).hour * 60 +
-          datetime.fromisoformat(c["due_at"]).minute for c in _cps) < eng.window(DAY)[1], True)
+          datetime.fromisoformat(c["due_at"]).minute
+          for c in _cps if c["kind"] != "bed") < eng.window(DAY)[1], True)
 check("no debt during the offset hour", eng.debt_seconds(DAY, T(18, 40)), 0)
 b = db.blocks(DAY)
 check("gym block slid +60 (19:00->20:00)", [x["start_min"] for x in b if x["label"]=="gym"], [20*60])
@@ -124,7 +129,7 @@ db2.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
 eng2.build_checkpoints(DAY, T(15, 59))
 
 eng2.tick(T(16, 0))                       # normal tick; records last_tick_at
-check("first tick asks", len(eng2.checkpoints(DAY)), 24)
+check("first tick asks", len(eng2.checkpoints(DAY)), 25)
 db2.set_lock(last_tick_at=T(16, 2).isoformat())   # ...then the server dies
 
 acts = eng2.tick(T(17, 32))               # 90 minutes later it comes back

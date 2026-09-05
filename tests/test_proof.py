@@ -83,7 +83,7 @@ check("no activity photo demanded at a screen", "activity" in essay, False)
 
 print("\n=== the day is far quieter than spot checks ===")
 check("five blocks", len(db.blocks(DAY)), 5)
-check("5 checkpoints total, one per block, down from 17", built["made"], 5)
+check("5 blocks + the bed photo = 6, down from 17", built["made"], 6)
 print(f"       {built['made']} photos across a 6-hour day, all clustered at 5 moments")
 
 print("\n=== the committed block policy ===")
@@ -140,8 +140,8 @@ db4.replace_blocks(DAY, [b.as_tuple() for b in _b])
 db4.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
 made = eng4.build_checkpoints(DAY, BEFORE)
 kinds_off = {r["kind"] for r in eng4.checkpoints(DAY)}
-check("no screenshots demanded at all", kinds_off, {"activity"})
-check("one photo per block, work or not", made["made"], 5)
+check("no screenshots demanded at all", kinds_off, {"activity", "bed"})
+check("one photo per block, work or not, plus the bed photo", made["made"], 6)
 check("...the same count either way now: one photo per block", made["made"], built["made"])
 
 print("\n=== a plan written late still cannot demand the past ===")
@@ -152,6 +152,44 @@ states = {r["state"] for r in eng2.checkpoints(DAY)
           if datetime.fromisoformat(r["due_at"]) <= late}
 check("everything already past is void", states, {"excused"})
 check("and some proof still lies ahead", b2["live"] > 0, True)
+
+print("\n=== the day ends with proof of going to bed ===")
+# The last block of the evening was the one nobody ever checked: the window shut
+# at 22:00 and whatever happened after was invisible.
+cfg5, db5, led5, eng5 = make()
+eng5.build_checkpoints(DAY, BEFORE)
+bed = eng5.bed_checkpoint(DAY)
+check("a bed checkpoint exists", bed is not None, True)
+check("due at 22:20, after the window shuts", bed["due_at"][11:16], "22:20")
+check("it belongs to the day, not a block", bed["block_id"], None)
+
+
+def N(h, m, day=25):
+    return datetime(2026, 8, day, h, m, tzinfo=TZ)
+
+
+check("21:00 — before bedtime, no bed siren", eng5.agent_state(N(21, 0)).headline.startswith("Go to bed"), False)
+check("22:30 — siren on", eng5.agent_state(N(22, 30)).phone_alarm, True)
+check("...and it says what it wants", "bed" in eng5.agent_state(N(22, 30)).headline.lower(), True)
+check("00:30 — still on, past midnight", eng5.agent_state(N(0, 30, 26)).phone_alarm, True)
+check("...and counts from bedtime, not midnight",
+      eng5.agent_state(N(0, 30, 26)).debt_minutes, 130)
+check("01:30 — past the cutoff, siren gives up", eng5.agent_state(N(1, 30, 26)).phone_alarm, False)
+
+print("\n=== the bed photo turns it off ===")
+db5.run("UPDATE checkpoints SET state='satisfied' WHERE id=?", (bed["id"],))
+check("silent once the photo lands", eng5.agent_state(N(22, 45)).phone_alarm, False)
+
+print("\n=== /latenight moves both bedtime and the cutoff ===")
+cfg6, db6, led6, eng6 = make()
+eng6.build_checkpoints(DAY, BEFORE)
+check("normally bed at 22:20", eng6.bed_due(DAY).strftime("%H:%M"), "22:20")
+check("normally quiet by 01:00", eng6.bed_cutoff(DAY).strftime("%d %H:%M"), "26 01:00")
+db6.run("UPDATE days SET bed_offset_minutes=120 WHERE date=?", (DAY.isoformat(),))
+check("with the late night, bed at 00:20", eng6.bed_due(DAY).strftime("%d %H:%M"), "26 00:20")
+check("and the siren runs to 03:00", eng6.bed_cutoff(DAY).strftime("%d %H:%M"), "26 03:00")
+check("23:00 is no longer past bedtime", eng6.bed_night(N(23, 0)), None)
+check("01:00 now is", eng6.bed_night(N(1, 0, 26)), DAY)
 
 print("\n=== sleep is protected from every kind of shift ===")
 cfg3, db3, led3, eng3 = make()

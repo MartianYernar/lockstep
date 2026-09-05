@@ -169,3 +169,15 @@ api:
 goals:
   min: 3          # fewest goals a day may have
   max: 5          # more than this is a wish list, not priorities
+sleep:
+  # The day ends with proof that you actually went to bed. Without it the
+  # last block of the evening is the one nobody ever checks.
+  bed_photo_at: '22:20'
+  # The siren runs from bed_photo_at until this, then gives up and marks
+  # the day failed. It does not run all night: a siren nobody can stop
+  # while asleep is a sleep-destroyer, not an accountability system.
+  siren_until: '01:00'
+  # Once every N days, /latenight buys this many extra hours -- but only
+  # with a photo showing friends/being out, or real deadline work.
+  latenight_hours: 2
+  latenight_every_days: 7

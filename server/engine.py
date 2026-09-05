@@ -36,12 +36,18 @@ OPEN_STATES = ("asked", "overdue")
 # happens once, at the START of a block, and then it leaves you alone -- the
 # blocker screenshots are what carry the rest of the session, because a running
 # block with an allowlist is evidence about the whole hour rather than a moment.
+def _minutes_of(hhmm: str) -> int:
+    hh, mm = str(hhmm).split(":")
+    return int(hh) * 60 + int(mm)
+
+
 PROOF_KINDS = {
     "blocker_toggle": "the blocker running, with the clock visible",
     "blocker_allow":  "what the block covers — the allowed or blocked list",
     # No longer generated; kept so checkpoints recorded before the cut resolve.
     "blocker_block":  "the BLOCKED sites list",
     "activity":       "the activity itself",
+    "bed":            "your bed, opened and ready to sleep in",
 }
 
 
@@ -115,6 +121,54 @@ class Engine:
         start = max(start, self.cfg.earliest_min)
         end = min(end, self.cfg.hard_end_min)
         return start, max(start, end)
+
+    # -- the end of the day ----------------------------------------------------
+    #
+    # The last block of the evening was the one nobody ever checked: the window
+    # shut at 22:00 and whatever happened after that was invisible. So the day
+    # ends with proof of the thing it is actually for -- being asleep.
+    def _sleep_conf(self) -> dict:
+        return self.cfg.raw.get("sleep", {}) or {}
+
+    def bed_offset(self, day: date) -> int:
+        row = self.db.day(day)
+        return int(row["bed_offset_minutes"] or 0) if row else 0
+
+    def bed_due(self, day: date) -> datetime:
+        """When the bed photo is asked for, including any /latenight offset."""
+        base = _minutes_of(self._sleep_conf().get("bed_photo_at", "22:20"))
+        return self.cfg.at(day, base + self.bed_offset(day))
+
+    def bed_cutoff(self, day: date) -> datetime:
+        """When the siren gives up and the night is written off.
+
+        It deliberately stops. A siren nobody can silence while asleep is a
+        sleep-destroyer, not an accountability system, and this project's whole
+        argument is that borrowing from sleep defeats the point.
+        """
+        raw = _minutes_of(self._sleep_conf().get("siren_until", "01:00"))
+        base = _minutes_of(self._sleep_conf().get("bed_photo_at", "22:20"))
+        # siren_until is normally past midnight, so it belongs to the next day.
+        at = self.cfg.at(day, raw + self.bed_offset(day))
+        if raw <= base:
+            at += timedelta(days=1)
+        return at
+
+    def bed_checkpoint(self, day: date):
+        return self.db.one(
+            "SELECT * FROM checkpoints WHERE date = ? AND kind = 'bed'",
+            (day.isoformat(),))
+
+    def bed_night(self, now: datetime) -> date | None:
+        """Which day's bedtime we are inside, if any.
+
+        After midnight the calendar has rolled over but the night has not, so
+        01:00 still belongs to yesterday's bed check.
+        """
+        for day in (now.date(), now.date() - timedelta(days=1)):
+            if self.bed_due(day) <= now < self.bed_cutoff(day):
+                return day
+        return None
 
     def in_window(self, now: datetime) -> bool:
         start, end = self.window(now.date())
@@ -277,6 +331,20 @@ class Engine:
             if cur.rowcount:
                 made += 1
                 voided += 1 if past else 0
+        # The bed photo sits outside the block loop on purpose: it belongs to
+        # the day rather than to any block, and it is due after the window has
+        # already shut.
+        bed_at = self.bed_due(day)
+        cur = self.db.conn.execute(
+            "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id, kind, state, settled_at)"
+            " VALUES (?, ?, NULL, 'bed', ?, ?)",
+            (day.isoformat(), bed_at.isoformat(),
+             "excused" if bed_at <= now else "scheduled",
+             now.isoformat() if bed_at <= now else None),
+        )
+        if cur.rowcount:
+            made += 1
+            voided += 1 if bed_at <= now else 0
         self.db.conn.commit()
         self.db.run("UPDATE days SET checkpoints_built = 1 WHERE date = ?", (day.isoformat(),))
         upcoming = self.db.one(
@@ -367,6 +435,24 @@ class Engine:
             return idle
         if lock["paused_until"] and now < datetime.fromisoformat(lock["paused_until"]):
             return idle
+        # The bed check runs after the window has shut, so it gets its own
+        # branch. Between bed time and the cutoff the siren is on until the
+        # photo lands -- otherwise "stay up as long as you like" is the one
+        # thing the whole day never checked.
+        night = self.bed_night(now)
+        if night is not None:
+            cp = self.bed_checkpoint(night)
+            if cp is not None and cp["state"] != "satisfied":
+                late = int((now - self.bed_due(night)).total_seconds() // 60)
+                return AgentState(
+                    active=True, level=1, debt_minutes=late, phone_alarm=True,
+                    alarm_volume_pct=int(e0.get("phone_alarm_volume_pct", 55)),
+                    alarm_repeats=int(e0.get("phone_repeats_base", 1)),
+                    poll_sec=int(e0.get("phone_poll_sec", 60)),
+                    apps_blocked=True,
+                    headline="Go to bed. Send a photo of it, opened.",
+                    detail=f"{late} min past bedtime. This stops when the photo lands.")
+
         if not self.in_window(now):
             return idle
 
@@ -490,11 +576,41 @@ class Engine:
                         "minutes": int(silence), "escalate": silence >= 60,
                     }))
 
+        # --- the bed check, which lives past the window ---
+        night = self.bed_night(now)
+        if night is not None:
+            cp = self.bed_checkpoint(night)
+            if cp is None:
+                self.build_checkpoints(night, now)
+                cp = self.bed_checkpoint(night)
+            if cp is not None and cp["state"] in ("scheduled", "asked", "overdue"):
+                if cp["state"] == "scheduled":
+                    self.db.run(
+                        "UPDATE checkpoints SET state='asked', asked_at=? WHERE id=?",
+                        (now.isoformat(), cp["id"]))
+                    actions.append(Action("ask", {"checkpoint_id": cp["id"], "kind": "bed",
+                                                  "label": "bed", "due_at": cp["due_at"]}))
+                elif self.db.claim(f"bed_nag:{night.isoformat()}:{minute // 5}"):
+                    actions.append(Action("bed_overdue", {
+                        "minutes": int((now - self.bed_due(night)).total_seconds() // 60)}))
+        else:
+            # Past the cutoff with no photo: the night is written off. The siren
+            # stops either way -- one that cannot be silenced while asleep
+            # destroys the sleep this whole project exists to protect.
+            for d in (day, day - timedelta(days=1)):
+                bed = self.bed_checkpoint(d)
+                if bed and bed["state"] in ("scheduled", "asked", "overdue") \
+                        and now >= self.bed_cutoff(d):
+                    self.db.run("UPDATE checkpoints SET state='missed', settled_at=? WHERE id=?",
+                                (now.isoformat(), bed["id"]))
+                    if self.db.claim(f"bed_missed:{d.isoformat()}"):
+                        actions.append(Action("bed_missed", {"date": d.isoformat()}))
+
         # --- once the window shuts: close the books and report ---
         if minute >= end:
             self.db.run(
                 "UPDATE checkpoints SET state='missed', settled_at=? "
-                "WHERE date=? AND state IN ('scheduled','asked','overdue')",
+                "WHERE date=? AND state IN ('scheduled','asked','overdue') AND kind != 'bed'",
                 (now.isoformat(), day.isoformat()),
             )
             row = self.db.day(day)

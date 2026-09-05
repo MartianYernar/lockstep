@@ -241,6 +241,7 @@ class LockstepBot:
             "<b>Commands</b>\n"
             "/goals — the 3-5 things tomorrow is for. Comes before the plan\n"
             "/done 2 — tick one of them off\n"
+            "/latenight reason — 2h past bedtime, once a week, needs a photo\n"
             "/plan — write the plan for the next day\n"
             "/today — today's goals, plan, and where you stand\n"
             "/status — system state and days remaining\n"
@@ -416,6 +417,62 @@ class LockstepBot:
         hit = sum(1 for r in rows if r["done"])
         await update.message.reply_text(
             f"{self._goals_text(today)}\n\n<b>{hit}/{len(rows)}</b>",
+            parse_mode=ParseMode.HTML)
+
+    # ======================================================================
+    # the once-a-week late night
+    # ======================================================================
+    async def cmd_latenight(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Two hours past bedtime, once a week, and it has to be earned.
+
+        This breaks a rule the README states in bold -- nothing moves the day
+        past the hard end. It is broken deliberately and narrowly: a real
+        hackathon deadline and a night out with friends are real, and a system
+        that cannot accommodate them gets abandoned rather than obeyed. The
+        narrowness is the whole safeguard: once every seven days, with a photo
+        that has to show it, and his father is told each time.
+        """
+        if not self._is_user(update):
+            return
+        conf = self.cfg.raw.get("sleep", {}) or {}
+        every = int(conf.get("latenight_every_days", 7))
+        hours = int(conf.get("latenight_hours", 2))
+        now = self.cfg.now()
+        night = self.engine.bed_night(now) or now.date()
+
+        row = self.db.day(night)
+        if row and int(row["bed_offset_minutes"] or 0):
+            await update.message.reply_text("You already used it tonight.")
+            return
+
+        last = self.db.one(
+            "SELECT date FROM days WHERE bed_offset_minutes > 0 AND date < ?"
+            " ORDER BY date DESC LIMIT 1", (night.isoformat(),))
+        if last:
+            gap = (night - date.fromisoformat(last["date"])).days
+            if gap < every:
+                await update.message.reply_text(
+                    f"Used it on <b>{last['date']}</b>, {gap} day"
+                    f"{'s' if gap != 1 else ''} ago. It's once every {every} days — "
+                    f"next one on <b>{date.fromisoformat(last['date']) + timedelta(days=every)}</b>.\n\n"
+                    "Go to bed.", parse_mode=ParseMode.HTML)
+                return
+
+        reason = update.message.text.partition(" ")[2].strip()
+        if len(reason) < 12:
+            await update.message.reply_text(
+                "What for? Write it out — <code>/latenight hackathon submission "
+                "due at midnight</code>.\n\nThen send a photo that shows it: the "
+                "people you're with, or the work on screen.", parse_mode=ParseMode.HTML)
+            return
+
+        self.pending[update.effective_chat.id] = {
+            "action": "latenight_photo", "date": night, "reason": reason,
+            "hours": hours}
+        await update.message.reply_text(
+            f"Now the photo — <b>{reason}</b>.\n\n"
+            "It has to actually show it: friends and where you are, or the work "
+            "on screen with a deadline visible. A photo of your ceiling won't do.",
             parse_mode=ParseMode.HTML)
 
     async def cmd_plan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1228,9 +1285,23 @@ class LockstepBot:
             await self._grant_offset(update, pend["reason"], path)
             return
 
+        if pend.get("action") == "latenight_photo":
+            await self._grant_latenight(update, pend, blob, mime, now)
+            return
+
         if not self.lock.enabled:
             await update.message.reply_text("System is off. Nothing to prove.")
             return
+
+        # The bed photo is owed after the window has already shut, so it has to
+        # be handled before the in-window guard turns every late photo away.
+        night = self.engine.bed_night(now)
+        if night is not None:
+            bed = self.engine.bed_checkpoint(night)
+            if bed is not None and bed["state"] != "satisfied":
+                await self._handle_bed_photo(update, night, bed, blob, mime, now)
+                return
+
         if not self.engine.in_window(now):
             await update.message.reply_text("Outside the window — nothing is being asked.")
             return
@@ -1279,6 +1350,71 @@ class LockstepBot:
             await self.send_guardian("⚠️ Vision model unreachable — a photo was accepted unchecked.")
         await update.message.reply_text(
             f"✅ Counted. {sc['hit']}/{sc['due']} today.{note}", parse_mode=ParseMode.HTML)
+
+    async def _handle_bed_photo(self, update: Update, night: date, bed,
+                                blob: bytes, mime: str, now: datetime) -> None:
+        await update.message.chat.send_action("typing")
+        verdict = await self.validator.check(
+            blob, "your bed, opened and ready to sleep in", "sleep", now,
+            mime=mime, kind="bed")
+        if not verdict.ok:
+            self.db.run("UPDATE checkpoints SET attempts = attempts + 1, verdict = ? WHERE id = ?",
+                        (verdict.to_json(), bed["id"]))
+            self.ledger.append("photo_rejected",
+                               {"checkpoint": bed["id"], "code": verdict.failure_code})
+            await update.message.reply_text(
+                f"❌ Not counted.\n\n{html.escape(verdict.reason)}\n\n"
+                "The siren is still running.", parse_mode=ParseMode.HTML)
+            return
+        path = self._save_photo(blob, night, "bed")
+        self.db.run(
+            "UPDATE checkpoints SET state='satisfied', settled_at=?, verdict=?, photo_path=?"
+            " WHERE id=?", (now.isoformat(), verdict.to_json(), path, bed["id"]))
+        self.ledger.append("bed_confirmed", {"date": night.isoformat()})
+        late = int((now - self.engine.bed_due(night)).total_seconds() // 60)
+        await update.message.reply_text(
+            f"🛏 <b>Counted. Siren off.</b>\n\n"
+            + (f"{late} min past bedtime.\n\n" if late > 0 else "")
+            + "Goodnight.", parse_mode=ParseMode.HTML)
+
+    async def _grant_latenight(self, update: Update, pend: dict, blob: bytes,
+                               mime: str, now: datetime) -> None:
+        night, reason, hours = pend["date"], pend["reason"], pend["hours"]
+        await update.message.chat.send_action("typing")
+        verdict = await self.validator.check(
+            blob, f"being out with people, or deadline work in progress: {reason}",
+            "other", now, mime=mime, kind="activity")
+        if not verdict.ok:
+            await update.message.reply_text(
+                f"❌ Not accepted.\n\n{html.escape(verdict.reason)}\n\n"
+                "Send one that shows it, or go to bed.", parse_mode=ParseMode.HTML)
+            return
+
+        self.pending.pop(update.effective_chat.id, None)
+        self.db.ensure_day(night)
+        self.db.run("UPDATE days SET bed_offset_minutes = ?, bed_reason = ? WHERE date = ?",
+                    (hours * 60, reason, night.isoformat()))
+        # The bed checkpoint was built at the old time, so move it.
+        bed = self.engine.bed_checkpoint(night)
+        if bed is not None:
+            self.db.run(
+                "UPDATE checkpoints SET due_at=?, state='scheduled', asked_at=NULL,"
+                " settled_at=NULL WHERE id=?",
+                (self.engine.bed_due(night).isoformat(), bed["id"]))
+        self._save_photo(blob, night, "latenight")
+        self.ledger.append("latenight_used",
+                           {"date": night.isoformat(), "hours": hours, "reason": reason})
+        new_bed = self.engine.bed_due(night)
+        await update.message.reply_text(
+            f"🌙 <b>{hours} hours.</b> Bed photo now due at "
+            f"<b>{new_bed:%H:%M}</b>, siren until "
+            f"<b>{self.engine.bed_cutoff(night):%H:%M}</b>.\n\n"
+            "That's this week's one. Your father has been told.",
+            parse_mode=ParseMode.HTML)
+        await self.send_guardian(
+            f"🌙 {self.cfg.user_name} used the weekly late night ({hours}h).\n"
+            f"Reason: <i>{html.escape(reason)}</i>\n"
+            f"Bedtime tonight moves to {new_bed:%H:%M}.")
 
     def _save_photo(self, blob: bytes, day: date, tag: str) -> str | None:
         """Keep what the policy allows and no more.
@@ -1469,6 +1605,10 @@ class LockstepBot:
                 "activity": (
                     f"📸 <b>{due:%H:%M}</b> — {label}\n\n"
                     f"Photo of you actually doing it, timestamp visible."),
+                "bed": (
+                    f"🛏 <b>{due:%H:%M}</b> — <b>bedtime.</b>\n\n"
+                    f"Photo of your bed, opened and ready to get into.\n\n"
+                    f"The siren runs until this lands."),
             }
             body = asks.get(kind, asks["activity"])
             if kind == "activity":
@@ -1509,6 +1649,21 @@ class LockstepBot:
                     f"📵 {self.cfg.user_name}'s phone agent has been silent for {p['minutes']} min "
                     "during the enforcement window. Could be a flat battery or a crash; "
                     "could also be switched off. Worth asking.")
+
+        elif act.kind == "bed_overdue":
+            await self.send_user(
+                f"🛏 <b>{p['minutes']} min past bedtime.</b>\n\n"
+                "Photo of your bed, opened. The siren stops when it lands.\n\n"
+                "Genuinely out or on a real deadline? <code>/latenight reason</code> "
+                "buys two hours — once a week, and it needs a photo.")
+
+        elif act.kind == "bed_missed":
+            await self.send_user(
+                "🛏 The siren has given up for tonight. No bed photo came, so "
+                f"<b>{p['date']}</b> is recorded as unfinished.\n\nGo to sleep.")
+            await self.send_guardian(
+                f"🛏 {self.cfg.user_name} never sent a bed photo on {p['date']}. "
+                "The siren ran from bedtime until the cutoff and then stopped.")
 
         elif act.kind == "plan_missing":
             await self.send_user(
@@ -1588,6 +1743,7 @@ class LockstepBot:
             ("start", self.cmd_start), ("help", self.cmd_help), ("status", self.cmd_status),
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
             ("goals", self.cmd_goals), ("done", self.cmd_done),
+            ("latenight", self.cmd_latenight),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),

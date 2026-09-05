@@ -225,6 +225,11 @@ REQUIREMENTS = {
         "A photograph of the person actually doing the task, with a visible\n"
         "  timestamp. For sport: the body mid-exercise or the equipment in use.\n"
         "  For sleep: the bed, ready. For cleaning: the thing being cleaned."),
+    "bed": (
+        "A photograph of THEIR BED, opened and ready to get into -- duvet turned\n"
+        "  back or pulled aside, sheet visible. A made-up, untouched bed does not\n"
+        "  count: the point is that they are going to sleep now, not that a bed\n"
+        "  exists. A visible timestamp is required. Nobody need be in shot."),
 }
 
 

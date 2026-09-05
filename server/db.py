@@ -19,7 +19,10 @@ CREATE TABLE IF NOT EXISTS days (
     offset_reason     TEXT,
     checkpoints_built INTEGER NOT NULL DEFAULT 0,
     reported          INTEGER NOT NULL DEFAULT 0,
-    extend_minutes    INTEGER NOT NULL DEFAULT 0
+    extend_minutes    INTEGER NOT NULL DEFAULT 0,
+    -- Minutes /latenight bought for this night, and why. 0 on a normal day.
+    bed_offset_minutes INTEGER NOT NULL DEFAULT 0,
+    bed_reason        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS blocks (
@@ -123,6 +126,12 @@ class Database:
         dhave = {r["name"] for r in self.conn.execute("PRAGMA table_info(days)")}
         if "extend_minutes" not in dhave:
             self.conn.execute("ALTER TABLE days ADD COLUMN extend_minutes INTEGER NOT NULL DEFAULT 0")
+        if "bed_offset_minutes" not in dhave:
+            # Minutes /latenight bought for this night, 0 on a normal day.
+            self.conn.execute(
+                "ALTER TABLE days ADD COLUMN bed_offset_minutes INTEGER NOT NULL DEFAULT 0")
+        if "bed_reason" not in dhave:
+            self.conn.execute("ALTER TABLE days ADD COLUMN bed_reason TEXT")
         chave = {r["name"] for r in self.conn.execute("PRAGMA table_info(checkpoints)")}
         if "kind" not in chave:
             self.conn.execute(

@@ -46,17 +46,27 @@ pts = minutes_of(eng)
 blocks = {b["id"]: b["label"] for b in db.blocks(DAY)}
 covered = {p[1] for p in pts}
 check("checkpoints created", n > 0, True)
+# The bed photo belongs to the day, not to any block, so it has no block id.
+covered = {c for c in covered if c is not None}
 check("no block left unchecked", len(covered), len(blocks))
-check("none orphaned (every check has a block)", all(p[1] is not None for p in pts), True)
+blockless = [p for p in pts if p[1] is None]
+check("exactly one check has no block, and it is the bed photo", len(blockless), 1)
+check("every other check belongs to a real block",
+      all(p[1] in blocks for p in pts if p[1] is not None), True)
 print(f"       {n} checks across {len(blocks)} blocks over a 6h window")
 for m, bid, lbl in pts:
     print(f"         {m//60:02d}:{m%60:02d}  {lbl}")
 
 print("\n=== each check lands inside its own block ===")
 rows = {b["id"]: (b["start_min"], b["end_min"]) for b in db.blocks(DAY)}
-ok = all(rows[bid][0] <= m < rows[bid][1] for m, bid, _ in pts)
+# The bed photo has no block and sits after the window shuts, by design.
+block_pts = [p for p in pts if p[1] is not None]
+ok = all(rows[bid][0] <= m < rows[bid][1] for m, bid, _ in block_pts)
 check("all inside their block", ok, True)
-check("all inside the enforced window", all(16*60 <= m < 22*60 for m, _, _ in pts), True)
+check("all inside the enforced window",
+      all(16*60 <= m < 22*60 for m, _, _ in block_pts), True)
+check("and the bed photo is after it, on purpose",
+      [m for m, bid, _ in pts if bid is None], [22*60 + 20])
 
 print("\n=== minimum gap is respected ===")
 gaps = [b[0] - a[0] for a, b in zip(pts, pts[1:])]
