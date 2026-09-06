@@ -118,6 +118,20 @@ class Config:
     def api(self) -> dict:
         return self.raw["api"]
 
+    @property
+    def api_port(self) -> int:
+        """The port to actually listen on.
+
+        Railway, Render, Koyeb and friends assign a port at boot and route to
+        it; the container is told through $PORT and nothing else. Binding the
+        configured 8765 there means the platform's router never finds the app,
+        the deploy reports healthy, and the phone gets nothing -- silent in
+        exactly the way this project keeps being bitten by.
+
+        On the laptop and on a plain VPS $PORT is unset and config wins.
+        """
+        return int(os.environ.get("PORT") or self.raw["api"]["port"])
+
     # -- time helpers ----------------------------------------------------------
     def now(self) -> datetime:
         return datetime.now(self.tz)

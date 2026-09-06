@@ -111,6 +111,19 @@ async def api_tests():
                   all(p.isdigit() for p in parts[1:]), True)
         # The phone only has to ask: does this text start with ALARM.
         check("a substring test is enough", txt.startswith("ALARM") or txt == "QUIET", True)
+
+print("\n=== $PORT wins, so a platform-assigned port is actually bound ===")
+# Railway, Render and friends hand the container a port at boot and route only
+# to that. Binding the configured 8765 means their router never finds the app:
+# the deploy reports healthy and the phone gets nothing.
+import os as _os
+check("config wins when $PORT is unset", cfg.api_port, 8765)
+_os.environ["PORT"] = "34567"
+try:
+    check("$PORT wins when the platform sets it", cfg.api_port, 34567)
+finally:
+    del _os.environ["PORT"]
+check("and config is back once it is gone", cfg.api_port, 8765)
 asyncio.run(api_tests())
 
 sys.exit(report("LOCK/API TESTS"))

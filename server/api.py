@@ -125,7 +125,7 @@ async def start(cfg, engine, ledger) -> web.AppRunner:
     app = build_app(cfg, engine, ledger)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, cfg.api["host"], int(cfg.api["port"]))
+    site = web.TCPSite(runner, cfg.api["host"], cfg.api_port)
     await site.start()
-    log.info("agent API listening on %s:%s", cfg.api["host"], cfg.api["port"])
+    log.info("agent API listening on %s:%s", cfg.api["host"], cfg.api_port)
     return runner
