@@ -112,6 +112,20 @@ async def api_tests():
         # The phone only has to ask: does this text start with ALARM.
         check("a substring test is enough", txt.startswith("ALARM") or txt == "QUIET", True)
 
+        # /agent/gap: the escalation ladder lives on the server, and the phone
+        # only reads a number and sleeps for it. Nothing to parse means nothing
+        # to get wrong -- the JSON version failed silently for a week.
+        r = await client.get("/agent/gap")
+        check("gap needs a token", r.status, 401)
+        r = await client.get("/agent/gap?token=t")
+        check("gap answers 200", r.status, 200)
+        txt = (await r.text()).strip()
+        check("it is a bare integer, nothing else", txt.isdigit(), True)
+        n = int(txt)
+        check("0 means quiet, anything else is seconds",
+              n == 0 or 3 <= n <= 60, True)
+        check("never below 3s — a tone needs room to finish", n == 0 or n >= 3, True)
+
 print("\n=== $PORT wins, so a platform-assigned port is actually bound ===")
 # Railway, Render and friends hand the container a port at boot and route only
 # to that. Binding the configured 8765 means their router never finds the app:

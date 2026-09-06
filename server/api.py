@@ -83,9 +83,37 @@ def build_app(cfg, engine, ledger) -> web.Application:
                 if st["phone_alarm"] else "QUIET")
         return web.Response(text=body, content_type="text/plain")
 
+    async def gap(request: web.Request) -> web.Response:
+        """One integer: how many seconds until the phone should sound again.
+
+        "0" means nothing is owed. Anything else is both the instruction to
+        make a noise and the wait before the next one, so falling further
+        behind simply shortens the gap.
+
+        The escalation therefore lives entirely on the server. The phone holds
+        no ladder, no thresholds and no arithmetic -- it reads a number and
+        sleeps for it. That is the same reason the agents were kept dumb in the
+        first place: a dumb agent has nothing worth tampering with, and one
+        that does no parsing has nothing to get wrong. The JSON version failed
+        for exactly that reason, silently, for a week.
+        """
+        if not _authorised(request, token):
+            return web.Response(status=401, text="0")
+        now = cfg.now()
+        engine.db.set_lock(last_agent_poll=now.isoformat())
+        st = engine.agent_state(now).as_dict()
+        if not st["phone_alarm"]:
+            return web.Response(text="0", content_type="text/plain")
+        # alarm_repeats is "times per minute", so the gap is a minute divided
+        # by it. Floored at 3s: below that the tone has no room to finish and
+        # it stops sounding like an alarm and starts sounding like a fault.
+        repeats = max(1, int(st["alarm_repeats"]))
+        return web.Response(text=str(max(3, 60 // repeats)), content_type="text/plain")
+
     app.router.add_get("/health", health)
     app.router.add_get("/agent/state", state)
     app.router.add_get("/agent/siren", siren)
+    app.router.add_get("/agent/gap", gap)
     app.router.add_post("/agent/ack", ack)
     return app
 
