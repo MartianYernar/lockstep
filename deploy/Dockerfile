@@ -10,9 +10,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server/ ./server/
 
-# The database, photos and config are bind-mounted, so the image stays stateless
-# and you can rebuild it without ever putting the commitment at risk.
-VOLUME ["/data"]
+# The database, photos and config live on a mounted volume, so the image stays
+# stateless and can be rebuilt without ever putting the commitment at risk.
+#
+# There is deliberately no VOLUME instruction: Railway rejects the build
+# outright ("docker VOLUME is not supported, use Railway Volumes"), and it was
+# only ever a hint anyway -- docker-compose.yml mounts ./data:/data explicitly,
+# and Railway attaches its own volume at the same path. Nothing about where the
+# data lives depends on it.
 ENV LOCKSTEP_DB=/data/lockstep.db \
     LOCKSTEP_CONFIG=/data/config.yaml \
     PYTHONUNBUFFERED=1

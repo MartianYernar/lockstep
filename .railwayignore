@@ -1,0 +1,12 @@
+# railway up uploads the working directory as the build context. The Dockerfile
+# only COPYs requirements.txt and server/, but there is no reason to transmit a
+# live bot token, the ledger, or a 200MB virtualenv to a build server at all.
+config.yaml
+config.yaml.*
+*.db
+*.db-*
+photos/
+.venv/
+__pycache__/
+tests/fixtures_img/
+lockstep.log
