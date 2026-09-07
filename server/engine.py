@@ -291,8 +291,13 @@ class Engine:
                 # happens in the room, so a photo of it is. Asking a non-work
                 # block for both meant a gym block wanted a screenshot of a
                 # website blocker, which proves nothing about a gym block.
+                # The colon matters. This tested startswith("work"), so a block
+                # called "workout outside" counted as screen work and was asked
+                # for a Cold Turkey screenshot -- of a gym session. "workshop"
+                # and "working out" fell down the same hole. The tag is "work:"
+                # and nothing else is it.
                 kinds = (["blocker_toggle"]
-                         if b["label"].lower().startswith("work")
+                         if b["label"].lower().lstrip().startswith("work:")
                          else ["activity"])
             else:
                 kinds = ["activity"]

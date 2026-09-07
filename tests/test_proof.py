@@ -153,6 +153,32 @@ states = {r["state"] for r in eng2.checkpoints(DAY)
 check("everything already past is void", states, {"excused"})
 check("and some proof still lies ahead", b2["live"] > 0, True)
 
+print("\n=== 'workout' is not 'work:' ===")
+# This tested startswith("work"), so a block called "workout outside" counted as
+# screen work and was asked for a Cold Turkey screenshot of a gym session.
+import copy as _cw
+_raw = _cw.deepcopy(RAW)
+_raw["schedule"]["mode"] = "block_start"
+_raw["proof"] = {"shot_gap_min": 1}
+_raw["vision"] = dict(_raw["vision"], require_blocker_for_work=True)
+cfgw, dbw, ledw, engw, lkw = build(_raw)
+dbw.ensure_day(DAY)
+dbw.replace_blocks(DAY, [
+    (16 * 60, 17 * 60, "workout outside", "sport"),
+    (17 * 60, 18 * 60, "workshop with the robotics club", "other"),
+    (18 * 60, 19 * 60, "working out what to do", "other"),
+    (19 * 60, 20 * 60, "work: physics", "work"),
+    (20 * 60, 22 * 60, "work:essay", "work"),
+])
+dbw.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+engw.build_checkpoints(DAY, BEFORE)
+got = {r["label"]: r["kind"] for r in engw.checkpoints(DAY) if r["kind"] != "bed"}
+check("'workout outside' wants the body", got["workout outside"], "activity")
+check("'workshop ...' too", got["workshop with the robotics club"], "activity")
+check("'working out what to do' too", got["working out what to do"], "activity")
+check("'work: physics' wants the blocker", got["work: physics"], "blocker_toggle")
+check("'work:essay' too — no space needed", got["work:essay"], "blocker_toggle")
+
 print("\n=== the day ends with proof of going to bed ===")
 # The last block of the evening was the one nobody ever checked: the window shut
 # at 22:00 and whatever happened after was invisible.
