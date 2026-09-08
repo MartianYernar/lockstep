@@ -226,10 +226,16 @@ REQUIREMENTS = {
         "  timestamp. For sport: the body mid-exercise or the equipment in use.\n"
         "  For sleep: the bed, ready. For cleaning: the thing being cleaned."),
     "bed": (
-        "A photograph of THEIR BED, opened and ready to get into -- duvet turned\n"
-        "  back or pulled aside, sheet visible. A made-up, untouched bed does not\n"
-        "  count: the point is that they are going to sleep now, not that a bed\n"
-        "  exists. A visible timestamp is required. Nobody need be in shot."),
+        "A photograph of WHERE THEY SLEEP, made ready to sleep in now.\n"
+        "  {bed}\n"
+        "  Do not insist on a bed frame or a bedroom. A mattress or futon on the\n"
+        "  floor, a rug with bedding laid out, a sofa made up for the night, a\n"
+        "  sleeping bag -- all of these are somebody's bed and all of them count.\n"
+        "  What you are judging is whether it is PREPARED: bedding laid out,\n"
+        "  turned back, or opened. A bare floor with nothing on it does not count,\n"
+        "  and neither does a made-up bed nobody has touched -- the point is that\n"
+        "  they are going to sleep now, not that a place to sleep exists.\n"
+        "  A visible timestamp is required. Nobody need be in shot."),
 }
 
 
@@ -368,7 +374,14 @@ class Validator:
                     kind: str = "activity") -> Verdict:
         v = self.cfg.vision
         blocker = v.get("blocker_name", "Cold Turkey")
-        requirement = REQUIREMENTS.get(kind, REQUIREMENTS["activity"]).format(blocker=blocker)
+        # sleep.bed_looks_like describes where this particular person actually
+        # sleeps. Without it the check was written against an imagined bedroom
+        # and rejected a rug on the floor, which is where he sleeps, at the one
+        # moment the siren is running and cannot be silenced any other way.
+        bed = (self.cfg.raw.get("sleep", {}) or {}).get("bed_looks_like", "")
+        bed = f"They sleep on: {bed}." if bed else ""
+        requirement = REQUIREMENTS.get(kind, REQUIREMENTS["activity"]).format(
+            blocker=blocker, bed=bed)
         prompt = PROMPT.format(
             label=label, category=category, requirement=requirement,
             now=now.strftime("%Y-%m-%d %H:%M"), tz=str(self.cfg.tz),

@@ -142,7 +142,8 @@ class Database:
                           ("siren_test_until", "TEXT"),
                           ("muted_until", "TEXT"),
                           ("apps_open_until", "TEXT"), ("apps_opened_at", "TEXT"),
-                          ("stop_at", "TEXT"), ("stop_reason", "TEXT")):
+                          ("stop_at", "TEXT"), ("stop_reason", "TEXT"),
+                          ("poke_message_id", "INTEGER")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE lock_state ADD COLUMN {col} {decl}")
         self.conn.commit()

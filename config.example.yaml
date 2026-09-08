@@ -96,7 +96,12 @@ escalation:
   # silence -- easy to sit through. These control how long each burst lasts.
   phone_repeats_base: 10       # times it sounds per poll at level 0
   phone_repeats_per_step: 2    # +this many per 20 minutes behind
-  phone_repeats_max: 15        # ceiling -- see the warning below
+  phone_repeats_max: 15
+  # Android freezes the phone agent the moment the screen goes dark, and
+  # then reports it as still running. A push notification is the one thing
+  # it must deliver, so while there is debt the bot sends one message a
+  # minute purely to force the phone awake long enough to sound the siren.
+  telegram_poke: true        # ceiling -- see the warning below
 
   # Keep the burst under ~50 seconds. The macro is triggered once a minute, so
   # if one burst runs longer than that the next trigger lands on top of it and
@@ -173,6 +178,10 @@ sleep:
   # The day ends with proof that you actually went to bed. Without it the
   # last block of the evening is the one nobody ever checks.
   bed_photo_at: '22:20'
+  # Where you actually sleep. Without this the check assumes a bed frame
+  # in a bedroom and rejects anything else -- at the one moment the siren
+  # is running and cannot be silenced any other way.
+  bed_looks_like: a rug on the floor with bedding laid out on it
   # The siren runs from bed_photo_at until this, then gives up and marks
   # the day failed. It does not run all night: a siren nobody can stop
   # while asleep is a sleep-destroyer, not an accountability system.

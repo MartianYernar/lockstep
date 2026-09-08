@@ -1482,6 +1482,60 @@ class LockstepBot:
     # ======================================================================
     # the tick
     # ======================================================================
+    async def _poke(self, now: datetime) -> None:
+        """Wake the phone from outside, because it cannot wake itself.
+
+        The phone agent polls on a timer, and Android switches that timer off
+        the moment the screen goes dark -- on 8 Sep the flow reported itself as
+        running while the server saw not one request in two hours. Battery
+        settings help and do not fix it: the OS decides, and it decides against
+        you.
+
+        A push notification is the one thing it must deliver. Android will
+        freeze an app's timers all night and still ring a message through,
+        because a message is somebody trying to reach you. So the server stops
+        waiting to be asked and pokes instead: while there is debt, one Telegram
+        message a minute, which forces the phone awake long enough for the flow
+        to run and the siren to sound.
+
+        The previous poke is deleted as the next is sent, so the chat holds one
+        at a time rather than sixty. The notification still fires -- that is the
+        entire point -- but the history stays readable.
+        """
+        if not self.cfg.esc.get("telegram_poke", True):
+            return
+        st = self.engine.agent_state(now)
+        row = self.db.lock()
+        if not st.phone_alarm:
+            # Clear the last one on the way out, so a solved day leaves nothing.
+            if row["poke_message_id"]:
+                await self._delete_poke(row["poke_message_id"])
+                self.db.set_lock(poke_message_id=None)
+            return
+        if not self.db.claim(f"poke:{now:%Y-%m-%dT%H:%M}"):
+            return
+        old = row["poke_message_id"]
+        try:
+            msg = await self.app.bot.send_message(
+                self.cfg.user_chat_id,
+                f"🔔 <b>{st.debt_minutes} min behind</b> — {html.escape(st.headline)}",
+                parse_mode=ParseMode.HTML)
+            self.db.set_lock(poke_message_id=msg.message_id)
+        except Forbidden:
+            await self._on_blocked()
+            return
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("poke failed: %s", exc)
+            return
+        if old:
+            await self._delete_poke(old)
+
+    async def _delete_poke(self, message_id: int) -> None:
+        try:
+            await self.app.bot.delete_message(self.cfg.user_chat_id, message_id)
+        except Exception:                                     # noqa: BLE001
+            pass          # already gone, or too old for Telegram to delete
+
     async def tick(self, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
         try:
@@ -1496,6 +1550,10 @@ class LockstepBot:
             except Exception as exc:                          # noqa: BLE001
                 log.exception("action %s failed: %s", act.kind, exc)
 
+        try:
+            await self._poke(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.exception("poke failed: %s", exc)
 
         pend = self.lock.pending_stop()
         if pend and now >= pend:

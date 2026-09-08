@@ -545,6 +545,68 @@ u = FakeUpdate("/latenight friends are still out and about")
 run(bot.cmd_latenight(u, None))
 check("8 days later: allowed again", bot.pending[USER]["action"], "latenight_photo")
 
+print("\n=== the poke: waking a phone that cannot wake itself ===")
+# Android froze the phone agent with the screen off and still reported it as
+# running -- two hours, not one request. A push notification is the one thing
+# it must deliver, so the server pokes rather than waiting to be asked.
+cfg, db, led, eng, lk, bot, val = make()
+
+
+class _Behind:
+    phone_alarm, debt_minutes, headline = True, 14, "Send a photo of: work: physics"
+
+
+class _Clear:
+    phone_alarm, debt_minutes, headline = False, 0, ""
+
+
+deleted = []
+
+
+async def _fake_delete(chat_id, message_id):
+    deleted.append(message_id)
+
+
+bot.app.bot.delete_message = _fake_delete
+_msgs = []
+_orig_send = bot.app.bot.send_message
+
+
+async def _counting_send(chat_id, text, **kw):
+    _msgs.append(text)
+    await _orig_send(chat_id, text, **kw)
+    return types.SimpleNamespace(message_id=100 + len(_msgs))
+
+
+bot.app.bot.send_message = _counting_send
+now0 = cfg.now()
+
+bot.engine.agent_state = lambda n: _Behind()
+run(bot._poke(now0))
+check("pokes when behind", len(_msgs), 1)
+check("says how far behind, so the notification is worth reading", "14 min behind" in _msgs[0], True)
+check("names the task", "work: physics" in _msgs[0], True)
+check("remembers what it sent", db.lock()["poke_message_id"], 101)
+
+run(bot._poke(now0))
+check("only once a minute, not once a tick", len(_msgs), 1)
+
+run(bot._poke(now0 + timedelta(minutes=1)))
+check("pokes again the next minute", len(_msgs), 2)
+check("and deletes the previous one — the chat holds one, not sixty", deleted, [101])
+
+bot.engine.agent_state = lambda n: _Clear()
+run(bot._poke(now0 + timedelta(minutes=2)))
+check("silent once nothing is owed", len(_msgs), 2)
+check("and clears the last poke behind it", deleted, [101, 102])
+check("nothing left pointing at a deleted message", db.lock()["poke_message_id"], None)
+
+bot.cfg.raw["escalation"]["telegram_poke"] = False
+bot.engine.agent_state = lambda n: _Behind()
+run(bot._poke(now0 + timedelta(minutes=3)))
+check("config can switch it off", len(_msgs), 2)
+bot.cfg.raw["escalation"]["telegram_poke"] = True
+
 print("\n=== buttons: tapping beats typing ===")
 cfg, db, led, eng, lk, bot, val = make()
 bot.cfg.raw["telegram"]["guardian_chat_id"] = GUARDIAN
