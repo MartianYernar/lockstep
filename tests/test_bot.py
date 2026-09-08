@@ -545,6 +545,26 @@ u = FakeUpdate("/latenight friends are still out and about")
 run(bot.cmd_latenight(u, None))
 check("8 days later: allowed again", bot.pending[USER]["action"], "latenight_photo")
 
+print("\n=== the overdue message says when the siren starts, not that it has ===")
+# It used to announce "Escalation has started" the moment the grace ran out,
+# while phone_alarm_after_min held the siren back for another five minutes. The
+# silence then read as a broken system rather than a deliberate wait.
+from server.engine import Action as _A
+cfg, db, led, eng, lk, bot, val = make()
+now_m = cfg.now()
+
+bot.cfg.raw["escalation"]["phone_alarm_after_min"] = 5
+run(bot._dispatch(_A("mark_missed", {"label": "work: physics", "count": 1, "checkpoint_id": 1}), now_m))
+msg = bot.app.bot.to(USER)[-1]
+check("names the wait instead of claiming it started", "starts in 5 min" in msg, True)
+check("does not claim escalation has started", "has started" in msg, False)
+
+bot.cfg.raw["escalation"]["phone_alarm_after_min"] = 0
+run(bot._dispatch(_A("mark_missed", {"label": "work: physics", "count": 1, "checkpoint_id": 1}), now_m))
+msg = bot.app.bot.to(USER)[-1]
+check("with no wait, it truthfully says it has started", "has started" in msg, True)
+check("and promises no future minute", "starts in" in msg, False)
+
 print("\n=== the poke: waking a phone that cannot wake itself ===")
 # Android froze the phone agent with the screen off and still reported it as
 # running -- two hours, not one request. A push notification is the one thing

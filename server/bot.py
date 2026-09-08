@@ -1682,9 +1682,16 @@ class LockstepBot:
             what = ", ".join(html.escape(x) for x in labels)
             n = p.get("count", 1)
             prefix = f"⏰ Grace period gone ({n} checkpoints)" if n > 1 else "⏰ Grace period gone"
-            await self.send_user(
-                f"{prefix} for <b>{what}</b>. "
-                "Escalation has started — it stops the moment a valid photo lands.")
+            # This used to say "Escalation has started" the moment the grace ran
+            # out, while phone_alarm_after_min held the siren back for several
+            # more minutes. So the message announced a siren that was not coming
+            # yet, and the silence read as a broken system rather than a
+            # deliberate wait. Say what is actually true, and when.
+            wait = int(self.cfg.esc.get("phone_alarm_after_min", 0))
+            when = ("Escalation has started — it stops the moment a valid photo lands."
+                    if wait <= 0 else
+                    f"The siren starts in {wait} min unless a valid photo lands first.")
+            await self.send_user(f"{prefix} for <b>{what}</b>. {when}")
             self.ledger.append("checkpoint_overdue",
                                {"checkpoint": p["checkpoint_id"], "count": n})
 
