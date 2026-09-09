@@ -179,6 +179,25 @@ check("'working out what to do' too", got["working out what to do"], "activity")
 check("'work: physics' wants the blocker", got["work: physics"], "blocker_toggle")
 check("'work:essay' too — no space needed", got["work:essay"], "blocker_toggle")
 
+print("\n=== a block starting right now is checked, not written off ===")
+# Replanning at 17:06 into a block running 17:06-17:20 produced a checkpoint
+# born void, so the one block he had just decided to do went unchecked.
+cfg7, db7, led7, eng7 = make()
+NOW = datetime(2026, 8, 25, 17, 6, tzinfo=TZ)
+db7.replace_blocks(DAY, [
+    (16 * 60, 17 * 60 + 6, "work: the block that was truncated", "work"),
+    (17 * 60 + 6, 17 * 60 + 20, "dress up, eat", "other"),
+    (17 * 60 + 20, 22 * 60, "work: uni research", "work"),
+])
+eng7.build_checkpoints(DAY, NOW)
+at_now = [r for r in eng7.checkpoints(DAY) if r["due_at"][11:16] == "17:06"]
+check("the block starting now gets a checkpoint", len(at_now), 1)
+check("...and it is LIVE, not written off", at_now[0]["state"], "scheduled")
+check("...and it asks for the right thing", at_now[0]["kind"], "activity")
+
+old = [r for r in eng7.checkpoints(DAY) if r["due_at"][11:16] == "16:00"]
+check("but 16:00, an hour gone, is still void", old[0]["state"], "excused")
+
 print("\n=== the day ends with proof of going to bed ===")
 # The last block of the evening was the one nobody ever checked: the window shut
 # at 22:00 and whatever happened after was invisible.

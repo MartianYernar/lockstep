@@ -310,13 +310,22 @@ class Engine:
     def build_checkpoints(self, day: date, now: datetime | None = None) -> dict:
         """Materialise a day's checkpoints. Idempotent.
 
-        Anything already in the past at build time is born `excused`, never
+        A checkpoint whose block has already ENDED is born `excused`, never
         `scheduled`. Submit a plan at 18:56 for a window that opened at 16:00 and
         the old code would demand photographic proof of 16:34 -- a moment that no
         longer exists -- and put you in two hours of debt for failing to produce
         it. You cannot photograph the past. Those slots are void.
+
+        A slot that has only *just* passed is a different thing, and used to be
+        voided with the rest. Replanning at 17:06 into a block starting 17:06
+        produced a checkpoint born void, and fourteen minutes of the one block
+        he had just decided to do went entirely unchecked. A moment seconds old
+        is still answerable, so the cutoff is the grace period rather than the
+        instant itself -- the same tolerance the rest of the system already
+        allows for answering a checkpoint at all.
         """
         now = now or self.cfg.now()
+        answerable_since = now - timedelta(minutes=self.cfg.grace_min)
         if self.cfg.mode == "block_start":
             times = self._block_start_times(day)
         elif self.cfg.mode == "fixed":
@@ -326,7 +335,7 @@ class Engine:
         made = voided = 0
         for minute, block_id, kind in times:
             due = self.cfg.at(day, minute)
-            past = due <= now
+            past = due <= answerable_since
             cur = self.db.conn.execute(
                 "INSERT OR IGNORE INTO checkpoints (date, due_at, block_id, kind, state, settled_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
