@@ -545,6 +545,36 @@ u = FakeUpdate("/latenight friends are still out and about")
 run(bot.cmd_latenight(u, None))
 check("8 days later: allowed again", bot.pending[USER]["action"], "latenight_photo")
 
+print("\n=== replan closes the obligation it just made impossible ===")
+# Replan truncates the block you were in, so an unanswered checkpoint inside it
+# was left demanding proof of a task the plan no longer says you are doing --
+# and the block is over, so nothing could satisfy it. The siren then ran on an
+# obligation whose only exit was a faked photo.
+cfg, db, led, eng, lk, bot, val = make()
+today = cfg.today()
+db.ensure_day(today); db.set_goals(today, GOALS)
+db.replace_blocks(today, [(16 * 60, 19 * 60, "work: linear algebra", "work"),
+                          (19 * 60, 22 * 60, "work: essay", "work")])
+db.run("UPDATE days SET plan_locked=1 WHERE date=?", (today.isoformat(),))
+eng.build_checkpoints(today, cfg.at(today, 15 * 60 + 59))
+old = db.one("SELECT id FROM checkpoints WHERE date=? AND due_at LIKE ? LIMIT 1",
+             (today.isoformat(), f"{today.isoformat()}T16:00%"))
+db.run("UPDATE checkpoints SET state='overdue' WHERE id=?", (old["id"],))
+
+# replan at 17:06, which truncates the 16:00-19:00 block to 16:00-17:06
+cfg.now = lambda: cfg.at(today, 17 * 60 + 6)
+u = FakeUpdate("17:06-19:00 work: uni research\n19:00-22:00 work: essay")
+run(bot._accept_replan(u, u.message.text))
+check("replan accepted", "rewritten" in u.message.last, True)
+
+after = db.one("SELECT state FROM checkpoints WHERE id=?", (old["id"],))
+check("the unanswerable one is closed as MISSED", after["state"], "missed")
+check("not deleted — the miss stays on the record",
+      db.one("SELECT COUNT(*) n FROM checkpoints WHERE id=?", (old["id"],))["n"], 1)
+check("and it says so", "counts as missed" in u.message.last, True)
+check("debt is clear, so the siren stops demanding the impossible",
+      eng.debt_seconds(today, cfg.now()), 0)
+
 print("\n=== the overdue message says when the siren starts, not that it has ===")
 # It used to announce "Escalation has started" the moment the grace ran out,
 # while phone_alarm_after_min held the siren back for another five minutes. The

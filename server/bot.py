@@ -618,15 +618,33 @@ class LockstepBot:
         self.db.run(
             "DELETE FROM checkpoints WHERE date=? AND state='scheduled' AND due_at > ?",
             (today.isoformat(), now.isoformat()))
+        # A replan truncates the block you were in at the moment you replan, so
+        # an unanswered checkpoint inside it is left demanding proof of a task
+        # the plan no longer says you are doing -- and the block is over, so it
+        # cannot be satisfied at all. The siren then runs on an obligation whose
+        # only exit is a faked photo.
+        #
+        # Those are closed as MISSED, not deleted. The miss was real and stays
+        # on the record; what goes is the impossible demand. Replanning still
+        # cannot erase a miss, which is the property that stops it being a way
+        # to wipe debt.
+        closed = self.db.run(
+            "UPDATE checkpoints SET state='missed', settled_at=? WHERE date=?"
+            " AND state IN ('asked','overdue') AND block_id IN ("
+            "   SELECT id FROM blocks WHERE date=? AND end_min <= ?)",
+            (now.isoformat(), today.isoformat(), today.isoformat(), minute)).rowcount
         built = self.engine.build_checkpoints(today, now)
         self.ledger.append("replanned", {"date": today.isoformat(),
                                          "from": f"{minute//60:02d}:{minute%60:02d}"})
         self.pending.pop(update.effective_chat.id, None)
 
+        tail = (f"\n({closed} unanswered checkpoint{'s' if closed != 1 else ''} from the "
+                "block you just replanned away counts as missed — that block is over.)"
+                if closed else "")
         await update.message.reply_text(
             f"✅ Rest of today rewritten.\n\n{planner.render(blocks)}\n\n"
             f"{built['live']} checkpoints ahead. Day still ends at "
-            f"{end//60:02d}:{end%60:02d}.",
+            f"{end//60:02d}:{end%60:02d}.{tail}",
             parse_mode=ParseMode.HTML)
         await self.send_guardian(
             f"📝 {self.cfg.user_name} rewrote the rest of today from "
