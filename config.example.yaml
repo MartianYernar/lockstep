@@ -101,7 +101,10 @@ escalation:
   # then reports it as still running. A push notification is the one thing
   # it must deliver, so while there is debt the bot sends one message a
   # minute purely to force the phone awake long enough to sound the siren.
-  telegram_poke: true        # ceiling -- see the warning below
+  telegram_poke: true
+  # Which app runs the phone agent, so the 'your siren is dead' message names
+  # the right one. It said MacroDroid for a week after the switch to Automate.
+  agent_app: Automate        # ceiling -- see the warning below
 
   # Keep the burst under ~50 seconds. The macro is triggered once a minute, so
   # if one burst runs longer than that the next trigger lands on top of it and

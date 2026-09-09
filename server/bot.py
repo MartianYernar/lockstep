@@ -1724,8 +1724,10 @@ class LockstepBot:
         elif act.kind == "phone_silent":
             await self.send_user(
                 f"📵 <b>Your phone hasn't checked in for {p['minutes']} min.</b>\n\n"
-                "The alarm agent is dead, so nothing on your phone will nag you right now. "
-                "Check MacroDroid is running and that battery optimisation is off for it.\n\n"
+                "The siren is dead right now — nothing on your phone will make a noise.\n\n"
+                f"Open <b>{self.cfg.esc.get('agent_app', 'Automate')}</b> and press Start "
+                "on both flows. If they had stopped by themselves, that is the OS killing "
+                "the app, not a bug in them.\n\n"
                 "Telegram checkpoints carry on regardless — this only affects the siren.")
             if p.get("escalate"):
                 await self.send_guardian(
