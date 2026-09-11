@@ -94,8 +94,11 @@ told explicitly that ignoring it is a valid answer.
 ## 6. Phone agent — 15 min
 
 Pick one:
-- **[MacroDroid recipe](agent-android/macrodroid/RECIPE.md)** — recommended,
-  survives Android's battery killer better
+- **[Automate recipe](agent-android/automate/RECIPE.md)** — recommended, and the
+  one actually in use. Free, no ads, survives network drops.
+- **[MacroDroid recipe](agent-android/macrodroid/RECIPE.md)** — superseded: the free
+  tier asks you to watch an ad every three days, which you can't do if the app
+  is locked behind hidden apps
 - **[Termux script](agent-android/termux/install.md)** — fully scripted
 
 Either way, do the battery-optimisation steps. That is the difference between an

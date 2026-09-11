@@ -1,5 +1,10 @@
 # Phone agent — MacroDroid
 
+> **Superseded.** The phone agent now runs on Automate — see
+> [../automate/RECIPE.md](../automate/RECIPE.md). MacroDroid's free tier asks for an
+> ad every three days, which isn't possible with the app locked behind hidden
+> apps. This file is kept for reference.
+
 Install **MacroDroid** by **ArloSoft** (Jamie Arlott). The free tier allows five
 macros; this needs one.
 
