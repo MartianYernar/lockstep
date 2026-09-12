@@ -545,6 +545,24 @@ u = FakeUpdate("/latenight friends are still out and about")
 run(bot.cmd_latenight(u, None))
 check("8 days later: allowed again", bot.pending[USER]["action"], "latenight_photo")
 
+print("\n=== a weekend plan is validated against weekend hours ===")
+# Validating a Saturday plan against the weekday window would accept one that
+# leaves the whole weekend morning unblocked -- inside an enforced window, so
+# never checked, and silent about it.
+cfg, db, led, eng, lk, bot, val = make()
+SATB = date(2026, 9, 12)
+cfg.weekend_start_min, cfg.weekend_end_min = 10 * 60, 22 * 60
+db.ensure_day(SATB); db.set_goals(SATB, GOALS)
+
+u = FakeUpdate("16:00-22:00 work: essay")
+run(bot._accept_plan(u, SATB, u.message.text))
+check("a weekday-shaped plan is refused on a Saturday", u.message.last.startswith("❌"), True)
+check("and it names the morning left uncovered", "10:00-16:00" in u.message.last, True)
+
+u2 = FakeUpdate("10:00-22:00 work: essay")
+run(bot._accept_plan(u2, SATB, u2.message.text))
+check("covering 10:00-22:00 is accepted", "Locked in" in u2.message.last, True)
+
 print("\n=== replan closes the obligation it just made impossible ===")
 # Replan truncates the block you were in, so an unanswered checkpoint inside it
 # was left demanding proof of a task the plan no longer says you are doing --

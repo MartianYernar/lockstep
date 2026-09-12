@@ -493,7 +493,10 @@ class LockstepBot:
             return
         self.pending[update.effective_chat.id] = {"action": "plan", "date": target}
         await update.message.reply_text(
-            f"Plan for <b>{target:%A %d %B}</b>.\n\n{PLAN_HELP}", parse_mode=ParseMode.HTML)
+            f"Plan for <b>{target:%A %d %B}</b> — "
+            f"cover <b>{self.cfg.window_label(target)}</b>"
+            + (" (weekend hours)" if self.cfg.is_weekend(target) else "")
+            + f".\n\n{PLAN_HELP}", parse_mode=ParseMode.HTML)
 
     async def _accept_plan(self, update: Update, target: date, text: str) -> None:
         now = self.cfg.now()
@@ -509,7 +512,12 @@ class LockstepBot:
                 "One per line, then send the plan again.",
                 parse_mode=ParseMode.HTML)
             return
-        start, end = self.cfg.enforce_start_min, self.cfg.enforce_end_min
+        # The TARGET day's window, not today's. A Saturday plan written on Friday
+        # has to cover Saturday's hours; validating it against the weekday window
+        # would accept a plan that leaves the whole weekend morning unblocked,
+        # inside an enforced window, and therefore never checked.
+        start = self.cfg.enforce_start_for(target)
+        end = self.cfg.enforce_end_for(target)
         try:
             blocks = planner.parse(text)
             planner.validate_coverage(blocks, start, end)

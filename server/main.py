@@ -95,9 +95,14 @@ def main() -> None:
         "spot_check": f"random spot-checks ~1 per {cfg.spot_avg_min} min",
         "block_start": "proof at the top of each block",
     }.get(cfg.mode, f"every {cfg.interval_min} min")
-    log.info("lockstep up — window %02d:%02d-%02d:%02d, %s",
-             cfg.enforce_start_min // 60, cfg.enforce_start_min % 60,
-             cfg.enforce_end_min // 60, cfg.enforce_end_min % 60, cadence)
+    # Both windows, because a startup line showing only the weekday one is how
+    # three unenforced weekends went unnoticed.
+    import datetime as _dt
+    _mon, _sat = _dt.date(2026, 1, 5), _dt.date(2026, 1, 10)
+    weekend = (f", weekends {cfg.window_label(_sat)}"
+               if cfg.window_label(_sat) != cfg.window_label(_mon) else "")
+    log.info("lockstep up — window %s%s, %s",
+             cfg.window_label(_mon), weekend, cadence)
     app.run_polling(drop_pending_updates=True)
 
 

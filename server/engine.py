@@ -101,8 +101,11 @@ class Engine:
         # overrun push bedtime later is how a productivity system quietly turns
         # into a sleep-debt machine. Extra time comes out of something else.
         shift = (row["offset_minutes"] or 0) if row else 0
-        start = self.cfg.enforce_start_min
-        end = self.cfg.enforce_end_min + shift
+        # Weekends can have their own hours: the weekday window starts when
+        # school ends, which left every Saturday and Sunday morning outside the
+        # system entirely.
+        start = self.cfg.enforce_start_for(day)
+        end = self.cfg.enforce_end_for(day) + shift
 
         # The plan may reach outside the usual hours -- an hour of work before
         # school, say. Those blocks carry proof like any other, so the window

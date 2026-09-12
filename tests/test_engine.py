@@ -323,4 +323,32 @@ s, e = eng.window(day)
 check("a 04:00 block cannot drag the day earlier than 06:00", s, 6 * 60)
 check("a 23:30 block cannot push past the hard end 22:20", e, 22 * 60 + 20)
 
+print("\n=== weekends have their own hours ===")
+# The weekday window starts when school ends. One window for all seven days
+# left every weekend morning outside the system: three weekends in a row
+# scored nothing at all, because the day did not begin until 16:10.
+import copy as _cwk
+from fixtures import RAW as _RAWW
+SAT, MON = date(2026, 9, 12), date(2026, 9, 14)
+_wraw = _cwk.deepcopy(_RAWW)
+_wraw["schedule"]["weekend"] = {"days": [5, 6],
+                                "enforce_start": "10:00", "enforce_end": "22:00"}
+cfgw, dbw, ledw, engw, lkw = build(_wraw)
+check("Saturday counts as a weekend", cfgw.is_weekend(SAT), True)
+check("Monday does not", cfgw.is_weekend(MON), False)
+check("Saturday opens at 10:00", engw.window(SAT)[0], 10 * 60)
+check("Monday still opens at 16:00", engw.window(MON)[0], 16 * 60)
+check("both still close at 22:00", (engw.window(SAT)[1], engw.window(MON)[1]),
+      (22 * 60, 22 * 60))
+check("11:00 on Saturday is inside the window",
+      engw.in_window(datetime(2026, 9, 12, 11, 0, tzinfo=TZ)), True)
+check("11:00 on Monday is not",
+      engw.in_window(datetime(2026, 9, 14, 11, 0, tzinfo=TZ)), False)
+check("the label says which hours apply", cfgw.window_label(SAT), "10:00-22:00")
+
+print("\n=== no weekend section means nothing changes ===")
+cfg0, db0, led0, eng0, lk0 = build()
+check("Saturday matches a weekday when unconfigured",
+      eng0.window(SAT), eng0.window(MON))
+
 sys.exit(report("ENGINE TESTS"))

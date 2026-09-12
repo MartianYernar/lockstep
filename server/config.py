@@ -41,6 +41,14 @@ class Config:
     # A plan is allowed to reach earlier than the usual start, but not without
     # limit -- sleep is protected at both ends, not just at night.
     earliest_min: int = 6 * 60
+    # The weekday window starts when school ends. Saturday and Sunday have no
+    # school, so a single window for all seven days left every weekend morning
+    # unenforced -- three weekends in a row scored nothing at all because the
+    # day did not begin until 16:10. None means "same as a weekday", so a config
+    # without a weekend section behaves exactly as before.
+    weekend_days: tuple = (5, 6)                  # Mon=0 .. Sun=6
+    weekend_start_min: int | None = None
+    weekend_end_min: int | None = None
 
     @classmethod
     def load(cls, path: str | None = None) -> "Config":
@@ -62,11 +70,17 @@ class Config:
                 raw[section][key] = os.environ[env]
 
         sched = raw["schedule"]
+        wk = sched.get("weekend") or {}
         return cls(
             raw=raw,
             tz=ZoneInfo(raw["timezone"]),
             enforce_start_min=_minutes(sched["enforce_start"]),
             enforce_end_min=_minutes(sched["enforce_end"]),
+            weekend_days=tuple(int(d) for d in wk.get("days", (5, 6))),
+            weekend_start_min=(_minutes(wk["enforce_start"])
+                               if wk.get("enforce_start") else None),
+            weekend_end_min=(_minutes(wk["enforce_end"])
+                             if wk.get("enforce_end") else None),
             interval_min=int(sched["checkpoint_interval_min"]),
             grace_min=int(sched["grace_min"]),
             hard_end_min=_minutes(sched.get("hard_end", "22:20")),
@@ -78,6 +92,29 @@ class Config:
             plan_nag_times=[_hhmm(t) for t in sched.get("plan_nag_times", [])],
             daily_report_at=_hhmm(sched.get("daily_report_at", "22:15")),
         )
+
+    # -- the day's window ------------------------------------------------------
+    #
+    # Every caller that needs the window must ask for a specific DAY. The old
+    # enforce_start_min / enforce_end_min fields are the weekday values and are
+    # kept because plenty of code and tests read them directly, but anything
+    # deciding what is enforced has to go through these.
+    def is_weekend(self, day: date) -> bool:
+        return day.weekday() in self.weekend_days
+
+    def enforce_start_for(self, day: date) -> int:
+        if self.is_weekend(day) and self.weekend_start_min is not None:
+            return self.weekend_start_min
+        return self.enforce_start_min
+
+    def enforce_end_for(self, day: date) -> int:
+        if self.is_weekend(day) and self.weekend_end_min is not None:
+            return self.weekend_end_min
+        return self.enforce_end_min
+
+    def window_label(self, day: date) -> str:
+        s, e = self.enforce_start_for(day), self.enforce_end_for(day)
+        return f"{s // 60:02d}:{s % 60:02d}-{e // 60:02d}:{e % 60:02d}"
 
     # -- convenience accessors -------------------------------------------------
     @property

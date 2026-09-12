@@ -32,6 +32,10 @@ schedule:
   earliest: '06:00'      # a plan may reach this early, no earlier
   enforce_start: "16:00"          # proof window opens
   enforce_end:   "22:00"          # proof window closes
+  weekend:                        # omit entirely and weekends match weekdays
+    days: [5, 6]                  # Mon=0 .. Sun=6
+    enforce_start: "10:00"        # no school, so the day starts when you get up
+    enforce_end:   "22:00"
 
   # block_start = prove the session once, at the top of each block, then be
   #   left alone. Three blocker screenshots a minute apart, plus a photo of the
