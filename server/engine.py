@@ -308,6 +308,23 @@ class Engine:
                 minute = lo + i * gap
                 if minute < end and minute < b["end_min"]:
                     out.append((minute, b["id"], kind))
+
+            # On top of the proof at the top of the block, a photo every N
+            # minutes while the block runs. A block-start shot proves a session
+            # was started; it says nothing about the ninety minutes after it.
+            #
+            # Set proof.within_block_min: 0 (or leave it out) to go back to
+            # block starts only. Worth knowing what this costs: the README
+            # argues against constant interruption, and an earlier version of
+            # this project asked for a photo every three minutes -- 180 in one
+            # day, of which 9 were answered. The honest test is whether you
+            # still answer them in a week.
+            every = int(self.cfg.raw.get("proof", {}).get("within_block_min", 0))
+            if every > 0:
+                minute = lo + every
+                while minute < min(b["end_min"], end):
+                    out.append((minute, b["id"], "activity"))
+                    minute += every
         return out
 
     def build_checkpoints(self, day: date, now: datetime | None = None) -> dict:

@@ -179,6 +179,50 @@ check("'working out what to do' too", got["working out what to do"], "activity")
 check("'work: physics' wants the blocker", got["work: physics"], "blocker_toggle")
 check("'work:essay' too — no space needed", got["work:essay"], "blocker_toggle")
 
+print("\n=== proof every N minutes inside a block, not only at the top ===")
+# A block-start shot proves a session was started. It says nothing about the
+# ninety minutes after it.
+import copy as _cwb
+_wb = _cwb.deepcopy(RAW)
+_wb["schedule"]["mode"] = "block_start"
+_wb["proof"] = {"shot_gap_min": 1, "within_block_min": 20}
+_wb["vision"] = dict(_wb["vision"], require_blocker_for_work=True)
+cfg8, db8, led8, eng8, lk8 = build(_wb)
+db8.ensure_day(DAY)
+db8.replace_blocks(DAY, [(16 * 60, 18 * 60, "work: pset", "work"),
+                         (18 * 60, 18 * 60 + 30, "gym", "sport"),
+                         (18 * 60 + 30, 22 * 60, "work: essay", "work")])
+db8.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng8.build_checkpoints(DAY, BEFORE)
+rows8 = [r for r in eng8.checkpoints(DAY) if r["kind"] != "bed"]
+times = [r["due_at"][11:16] for r in rows8]
+
+check("top of the 16:00 block still asks for the blocker",
+      [r["kind"] for r in rows8 if r["due_at"][11:16] == "16:00"], ["blocker_toggle"])
+check("then every 20 min inside it",
+      [t for t in times if t in ("16:20", "16:40", "17:00", "17:20", "17:40")],
+      ["16:20", "16:40", "17:00", "17:20", "17:40"])
+check("nothing at 18:00 from the first block — that is the next block's own top",
+      len([r for r in rows8 if r["due_at"][11:16] == "18:00"]), 1)
+check("the in-block ones ask for the activity, not another screenshot",
+      {r["kind"] for r in rows8 if r["due_at"][11:16] in ("16:20", "17:40")}, {"activity"})
+check("a 30-min gym block gets its top plus one at +20",
+      sorted(t for t in times if t in ("18:00", "18:20")), ["18:00", "18:20"])
+check("none land past the window", max(times) < "22:00", True)
+
+print("\n=== and omitting it keeps block-starts only ===")
+_off2 = _cwb.deepcopy(RAW)
+_off2["schedule"]["mode"] = "block_start"
+_off2["proof"] = {"shot_gap_min": 1}
+_off2["vision"] = dict(_off2["vision"], require_blocker_for_work=True)
+cfg9, db9, led9, eng9, lk9 = build(_off2)
+db9.ensure_day(DAY)
+db9.replace_blocks(DAY, [(16 * 60, 18 * 60, "work: pset", "work")])
+db9.run("UPDATE days SET plan_locked=1 WHERE date=?", (DAY.isoformat(),))
+eng9.build_checkpoints(DAY, BEFORE)
+check("one checkpoint for a two-hour block",
+      len([r for r in eng9.checkpoints(DAY) if r["kind"] != "bed"]), 1)
+
 print("\n=== a block starting right now is checked, not written off ===")
 # Replanning at 17:06 into a block running 17:06-17:20 produced a checkpoint
 # born void, so the one block he had just decided to do went unchecked.

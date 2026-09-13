@@ -131,6 +131,7 @@ vision:
 
 proof:
   shot_gap_min: 1              # minutes between the three blocker screenshots
+  within_block_min: 20         # extra photo every N min inside a block; 0 = off
 
 heartbeat:
   # A URL that must be pinged regularly or an alarm fires SOMEWHERE ELSE.
