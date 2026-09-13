@@ -23,6 +23,28 @@ def _authorised(request: web.Request, token: str) -> bool:
     return request.query.get("token") == token
 
 
+def _note_battery(request: web.Request, engine, now) -> None:
+    """Record what the phone says about its own power, if it says anything.
+
+    The agent dies when the phone does, and this phone has been at 2% more than
+    once. Optional query params so an agent that doesn't send them keeps working
+    exactly as before: ?batt=37&chg=1
+    """
+    batt, chg = request.query.get("batt"), request.query.get("chg")
+    if batt is None and chg is None:
+        return
+    fields = {"phone_batt_at": now.isoformat()}
+    try:
+        if batt is not None:
+            fields["phone_battery"] = max(0, min(100, int(float(batt))))
+        if chg is not None:
+            fields["phone_charging"] = 1 if str(chg).strip().lower() in (
+                "1", "true", "yes", "charging", "ac", "usb") else 0
+    except (TypeError, ValueError):
+        return                                # a malformed reading is no reading
+    engine.db.set_lock(**fields)
+
+
 def build_app(cfg, engine, ledger) -> web.Application:
     token = cfg.api["token"]
     app = web.Application()
@@ -43,6 +65,7 @@ def build_app(cfg, engine, ledger) -> web.Application:
         # can no longer nag you, which looks exactly like compliance.
         cfg_now = cfg.now()
         engine.db.set_lock(last_agent_poll=cfg_now.isoformat())
+        _note_battery(request, engine, cfg_now)
         st = engine.agent_state(cfg_now)
         return web.json_response(st.as_dict())
 
@@ -78,6 +101,7 @@ def build_app(cfg, engine, ledger) -> web.Application:
             return web.Response(status=401, text="UNAUTHORISED")
         now = cfg.now()
         engine.db.set_lock(last_agent_poll=now.isoformat())
+        _note_battery(request, engine, now)
         st = engine.agent_state(now).as_dict()
         body = (f"ALARM {int(st['alarm_volume_pct'])} {int(st['alarm_repeats'])}"
                 if st["phone_alarm"] else "QUIET")
@@ -101,6 +125,7 @@ def build_app(cfg, engine, ledger) -> web.Application:
             return web.Response(status=401, text="0")
         now = cfg.now()
         engine.db.set_lock(last_agent_poll=now.isoformat())
+        _note_battery(request, engine, now)
         st = engine.agent_state(now).as_dict()
         if not st["phone_alarm"]:
             return web.Response(text="0", content_type="text/plain")

@@ -143,7 +143,11 @@ class Database:
                           ("muted_until", "TEXT"),
                           ("apps_open_until", "TEXT"), ("apps_opened_at", "TEXT"),
                           ("stop_at", "TEXT"), ("stop_reason", "TEXT"),
-                          ("poke_message_id", "INTEGER")):
+                          ("poke_message_id", "INTEGER"),
+                          # What the phone last reported about its own battery.
+                          # An agent on a phone at 2% is an agent about to stop.
+                          ("phone_battery", "INTEGER"), ("phone_charging", "INTEGER"),
+                          ("phone_batt_at", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE lock_state ADD COLUMN {col} {decl}")
         self.conn.commit()

@@ -265,6 +265,58 @@ check("...and counts from bedtime, not midnight",
       eng5.agent_state(N(0, 30, 26)).debt_minutes, 130)
 check("01:30 — past the cutoff, siren gives up", eng5.agent_state(N(1, 30, 26)).phone_alarm, False)
 
+print("\n=== a missing plan for tomorrow sirens, but never past bedtime ===")
+# Telegram nags were the only pressure to write tomorrow's plan, and 9 of 19
+# days had one. A day with no plan produces nothing, because with no plan there
+# are no checkpoints to miss.
+import copy as _cpl
+_praw = _cpl.deepcopy(RAW)
+_praw["schedule"].update({"mode": "block_start", "plan_due": "22:00"})
+_praw["proof"] = {"shot_gap_min": 1}
+cfgp, dbp, ledp, engp, lkp = build(_praw)
+dbp.set_lock(enabled=1, commitment_end="2099-01-01")
+TOM = DAY + __import__("datetime").timedelta(days=1)
+
+check("21:50 — before the deadline, silent",
+      engp.plan_overdue_for(datetime(2026, 8, 25, 21, 50, tzinfo=TZ)), None)
+check("22:05 — past it and no plan, so it is owed",
+      engp.plan_overdue_for(datetime(2026, 8, 25, 22, 5, tzinfo=TZ)), TOM)
+st = engp.agent_state(datetime(2026, 8, 25, 22, 5, tzinfo=TZ))
+check("...and the siren is on", st.phone_alarm, True)
+check("...naming the day it wants", TOM.strftime("%A") in st.headline, True)
+
+engp.build_checkpoints(DAY, datetime(2026, 8, 25, 15, 0, tzinfo=TZ))
+check("22:25 — past bedtime, the plan siren stops",
+      engp.plan_overdue_for(datetime(2026, 8, 25, 22, 25, tzinfo=TZ)), None)
+check("...and the bed check has taken over",
+      "bed" in engp.agent_state(datetime(2026, 8, 25, 22, 25, tzinfo=TZ)).headline.lower(), True)
+
+dbp.ensure_day(TOM)
+dbp.run("UPDATE days SET plan_locked=1 WHERE date=?", (TOM.isoformat(),))
+check("once the plan lands it goes quiet",
+      engp.plan_overdue_for(datetime(2026, 8, 25, 22, 5, tzinfo=TZ)), None)
+
+print("\n=== a phone about to die is a siren about to stop ===")
+cfgb, dbb, ledb, engb, lkb = build(_cpl.deepcopy(_praw))
+dbb.set_lock(enabled=1, commitment_end="2099-01-01")
+NOWB = datetime(2026, 8, 25, 18, 0, tzinfo=TZ)
+cfgb.raw["escalation"]["charge_below_pct"] = 30
+
+check("no reading at all means nothing fires", engb.phone_needs_charger(NOWB), None)
+dbb.set_lock(phone_battery=12, phone_charging=0, phone_batt_at=NOWB.isoformat())
+check("12% and unplugged is a problem", engb.phone_needs_charger(NOWB), 12)
+dbb.set_lock(phone_charging=1)
+check("12% but plugged in is fine", engb.phone_needs_charger(NOWB), None)
+dbb.set_lock(phone_battery=80, phone_charging=0)
+check("80% unplugged is fine", engb.phone_needs_charger(NOWB), None)
+dbb.set_lock(phone_battery=12,
+             phone_batt_at=(NOWB - __import__("datetime").timedelta(minutes=30)).isoformat())
+check("a half-hour-old reading says nothing about now",
+      engb.phone_needs_charger(NOWB), None)
+cfgb.raw["escalation"]["charge_below_pct"] = 0
+dbb.set_lock(phone_batt_at=NOWB.isoformat())
+check("and 0 switches the whole rule off", engb.phone_needs_charger(NOWB), None)
+
 print("\n=== the bed photo turns it off ===")
 db5.run("UPDATE checkpoints SET state='satisfied' WHERE id=?", (bed["id"],))
 check("silent once the photo lands", eng5.agent_state(N(22, 45)).phone_alarm, False)

@@ -162,6 +162,56 @@ class Engine:
             "SELECT * FROM checkpoints WHERE date = ? AND kind = 'bed'",
             (day.isoformat(),))
 
+    def plan_overdue_for(self, now: datetime) -> date | None:
+        """The day whose plan is overdue right now, or None.
+
+        Nagging by Telegram at the configured times was the only pressure to
+        write tomorrow's plan, and the record says it wasn't enough: 9 of 19
+        days had a plan at all, and the days without one produced nothing,
+        because with no plan there are no checkpoints to miss. The plan is the
+        thing everything else hangs off, so it gets the siren too.
+
+        It runs from the deadline until BEDTIME, not until the bed cutoff. Past
+        bedtime the bed check takes over and sleep wins: a missing plan must not
+        be a reason to keep him up, which is the one rule this project has never
+        broken. The plan is still enforced tomorrow anyway -- a day with no plan
+        sirens from the moment its window opens -- so the night-before siren is
+        pressure, not the only chance.
+
+        A plan_due configured later than bedtime therefore produces no window at
+        all, which is the honest outcome of contradictory settings.
+        """
+        due = self.cfg.plan_due.hour * 60 + self.cfg.plan_due.minute
+        # After midnight the calendar has rolled but the evening has not: at
+        # 00:30 the plan still owed is for the day that just started.
+        for d in (now.date(), now.date() - timedelta(days=1)):
+            if self.cfg.at(d, due) <= now < self.bed_due(d):
+                target = d + timedelta(days=1)
+                return None if self.has_plan(target) else target
+        return None
+
+    def phone_needs_charger(self, now: datetime) -> int | None:
+        """Battery percentage if the phone is low and unplugged, else None.
+
+        The agent dies with the phone, and this one has been at 2% during an
+        enforcement window more than once -- which looks exactly like a working
+        system on a day nothing was owed. Only acts on a reading the phone sent
+        in the last ten minutes; a stale one tells you nothing about now, and
+        phone silence is already its own alarm.
+        """
+        pct_limit = int(self.cfg.esc.get("charge_below_pct", 0))
+        if pct_limit <= 0:
+            return None
+        row = self.db.lock()
+        at, batt = row["phone_batt_at"], row["phone_battery"]
+        if not at or batt is None:
+            return None
+        if (now - datetime.fromisoformat(at)).total_seconds() > 600:
+            return None
+        if row["phone_charging"]:
+            return None
+        return int(batt) if int(batt) < pct_limit else None
+
     def bed_night(self, now: datetime) -> date | None:
         """Which day's bedtime we are inside, if any.
 
@@ -469,6 +519,22 @@ class Engine:
             return idle
         if lock["paused_until"] and now < datetime.fromisoformat(lock["paused_until"]):
             return idle
+        # Tomorrow's plan comes before bed, because its deadline is earlier and
+        # because going to sleep without one means tomorrow is unenforced.
+        owed = self.plan_overdue_for(now)
+        if owed is not None:
+            due_at = self.cfg.at(owed - timedelta(days=1),
+                                 self.cfg.plan_due.hour * 60 + self.cfg.plan_due.minute)
+            late = int((now - due_at).total_seconds() // 60)
+            return AgentState(
+                active=True, level=1, debt_minutes=late, phone_alarm=True,
+                alarm_volume_pct=int(e0.get("phone_alarm_volume_pct", 55)),
+                alarm_repeats=int(e0.get("phone_repeats_base", 1)),
+                poll_sec=int(e0.get("phone_poll_sec", 60)),
+                apps_blocked=True,
+                headline=f"Send the plan for {owed:%A}. /goals first.",
+                detail=f"{late} min past the deadline. Nothing stops until it lands.")
+
         # The bed check runs after the window has shut, so it gets its own
         # branch. Between bed time and the cutoff the siren is on until the
         # photo lands -- otherwise "stay up as long as you like" is the one
@@ -492,6 +558,19 @@ class Engine:
 
         debt = self.debt_seconds(day, now)
         if debt <= 0:
+            # Nothing owed, but a phone about to die is a siren about to stop.
+            # Checked last, so it never overrides a real checkpoint -- being
+            # behind matters more than being unplugged.
+            low = self.phone_needs_charger(now)
+            if low is not None:
+                return AgentState(
+                    active=True, level=0, debt_minutes=0, phone_alarm=True,
+                    alarm_volume_pct=int(e0.get("phone_alarm_volume_pct", 55)),
+                    alarm_repeats=int(e0.get("phone_repeats_base", 1)),
+                    poll_sec=int(e0.get("phone_poll_sec", 60)),
+                    apps_blocked=self.apps_blocked(now),
+                    headline=f"Put the phone on the charger — {low}%.",
+                    detail="A dead phone is a dead siren. This stops when it's plugged in.")
             return idle
 
         e = self.cfg.esc

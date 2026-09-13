@@ -106,6 +106,7 @@ escalation:
   # it must deliver, so while there is debt the bot sends one message a
   # minute purely to force the phone awake long enough to sound the siren.
   telegram_poke: true
+  charge_below_pct: 30         # siren if phone is below this and unplugged; 0 = off
   # Which app runs the phone agent, so the 'your siren is dead' message names
   # the right one. It said MacroDroid for a week after the switch to Automate.
   agent_app: Automate        # ceiling -- see the warning below
