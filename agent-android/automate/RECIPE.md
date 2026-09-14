@@ -39,22 +39,25 @@ against this list.
 ```
 1   Flow beginning
       ↓
-10  Failure catch ──── FAIL ──────────────┐
-      ↓ OK                                │
-2   HTTP request                          │
-      ↓ OK                                │
-3   Expression true?                      │
-      │ YES             │ NO              │
-      ↓                 ↓                 │
-4   Audio volume set    7  Delay 1m ──┐   │
-      ↓  ◄──────────────────────────────── ┘
-5   Vibrate                           │
-      ↓                               │
-6   Tone play                         │
-      ↓                               │
-8   Delay max(resp,10) ──┐            │
-                         ↓            ↓
-                    back to 2 (HTTP request)
+10  Failure catch ─── FAIL ──→  11  Expression true?   (awake hours?)
+      ↓ OK                           │ YES         │ NO
+      ↓                              │             │
+2   HTTP request                     │             │
+      ↓ OK                           │             │
+3   Expression true?  (resp != "0")  │             │
+      │ YES                 │ NO     │             │
+      ↓  ◄─────────────────────────────┘           │
+4   Audio volume set        │                      │
+      ↓                     ↓                      ↓
+5   Vibrate            7  Delay 1m  ◄──────────────┘
+      ↓                     │
+6   Tone play               │
+      ↓                     │
+8   Delay max(resp,10)      │
+      │                     │
+      └─────────┬───────────┘
+                ↓
+         back to 2 (HTTP request)
 ```
 
 ### Block settings
@@ -62,7 +65,35 @@ against this list.
 **10 · Failure catch**
 - Retry limit: **`999999`** ← if this is blank the flow dies after the first network drop
 - Output variables: leave blank
-- `OK` → block 2. `FAIL` → **block 4** (so losing the network makes a noise instead of going silent)
+- `OK` → block 2. `FAIL` → **block 11** (losing the network makes a noise, unless it's the middle of the night)
+
+**11 · Expression true?** — the quiet hours
+
+Only sits on the `FAIL` path, so it has no effect at all while the network is up.
+It answers one question: *is it a reasonable hour to be shouting at me?*
+
+- Formula (paste it exactly, brackets and all):
+
+  ```
+  (dateParts()[3] >= (((dateParts()[7] = 0) || (dateParts()[7] = 6)) ? 10 : 7)) && (dateParts()[3] < 22)
+  ```
+
+- `YES` → block 4 (siren, as before). `NO` → **block 7** (quiet minute, then try the network again)
+
+Reading it left to right: `dateParts()` is the phone's own clock, `[3]` is the
+hour 0–23 and `[7]` is the day of the week where **0 is Sunday and 6 is Saturday**.
+So on Saturday or Sunday the siren is allowed from 10:00, on any other day from
+07:00, and on every day it stops at 22:00.
+
+| | offline siren allowed | silent |
+|---|---|---|
+| Mon–Fri | 07:00 – 22:00 | 22:00 – 07:00 |
+| Sat, Sun | 10:00 – 22:00 | 22:00 – 10:00 |
+
+To change the hours, change the three numbers `10`, `7` and `22` — nothing else.
+
+If Automate underlines `dateParts()` as an error for taking no arguments, write
+`dateParts(clock("realtime"))` in all three places instead; it means the same thing.
 
 **2 · HTTP request**
 - Request URL: `https://<your-app>.up.railway.app/agent/gap?token=YOUR_TOKEN`
@@ -71,7 +102,7 @@ against this list.
 - Output variables → **Response content or filename**: `resp`
 - Everything else blank
 
-**3 · Expression true?**
+**3 · Expression true?** — is anything owed
 - Formula: `resp != "0"`
 - `YES` → block 4. `NO` → block 7
 
@@ -187,11 +218,15 @@ If you ever depend on it, check its Log first.
 ## Testing
 
 1. Send `/testsiren` to the bot. The phone should sound within about 10 seconds.
-2. **The test that matters:** turn wifi *and* mobile data off for five minutes.
-   You should get a siren about every 10 seconds the whole time. When you turn the
-   network back on, the flow should carry on by itself and its Log should **not**
-   say *Stopped by failure*.
-3. Silent mode on, media volume at zero, `/testsiren` again. It should still ring,
+2. **The test that matters:** *during the day*, turn wifi *and* mobile data off for
+   five minutes. You should get a siren about every 10 seconds the whole time. When
+   you turn the network back on, the flow should carry on by itself and its Log
+   should **not** say *Stopped by failure*.
+3. **The quiet-hours test:** do the same thing after 22:00. You should get **no**
+   siren at all, and Automate's Log for the flow should still be ticking over once
+   a minute — quiet is not the same as stopped. If you can't stay up, set the `22`
+   in block 11 down to the current hour for one test, then put it back.
+4. Silent mode on, media volume at zero, `/testsiren` again. It should still ring,
    because it's on the Alarm stream.
 
 ## When it goes quiet
@@ -203,6 +238,8 @@ If you ever depend on it, check its Log first.
 | Bot says *"Your phone hasn't checked in for N min"* | The flow isn't running. Open Automate and press Start on all three |
 | Browser URL doesn't load | Server or token problem, not the phone |
 | Siren fires constantly even when caught up | Expression still says `"QUIET"`, but `/agent/gap` answers `0` |
+| Silent all day with no network | Block 11's hours are wrong, or the phone's clock/timezone is off. `dateParts()[3]` is the phone's own hour, not the server's |
+| Still screams at 3 a.m. with no network | `FAIL` still points at block 4 instead of block 11 |
 
 You can see the phone's traffic from the server side:
 
