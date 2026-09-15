@@ -48,6 +48,7 @@ PROOF_KINDS = {
     "blocker_block":  "the BLOCKED sites list",
     "activity":       "the activity itself",
     "bed":            "your bed, opened and ready to sleep in",
+    "outside":        "where you are — the street, the yard, the stairwell",
 }
 
 
@@ -132,6 +133,52 @@ class Engine:
     # ends with proof of the thing it is actually for -- being asleep.
     def _sleep_conf(self) -> dict:
         return self.cfg.raw.get("sleep", {}) or {}
+
+    # -- being away from the wifi, legitimately ------------------------------
+    #
+    # The phone has no mobile data, so it goes dark every time he leaves the
+    # house. The flow treats an unreachable server as a siren, which is right
+    # when he has killed the wifi to dodge a checkpoint and wrong when he has
+    # simply walked to the shop. Nothing on the phone can tell those apart --
+    # both look like no connection -- so the distinction is made here, before
+    # he goes, with a photo of where he is.
+    #
+    # It buys silence, not forgiveness: checkpoints inside the excused stretch
+    # still come due and still go missed. Otherwise this is just a /skip with
+    # extra steps.
+    def outside_conf(self) -> dict:
+        return self.cfg.raw.get("outside", {}) or {}
+
+    def outside_until(self, day: date) -> datetime | None:
+        row = self.db.day(day)
+        raw = row["outside_until"] if row is not None else None
+        return datetime.fromisoformat(raw) if raw else None
+
+    def outside_used(self, day: date) -> int:
+        row = self.db.day(day)
+        return int(row["outside_used"] or 0) if row is not None else 0
+
+    def outside_active(self, now: datetime) -> bool:
+        """True while a granted trip is still running.
+
+        Checks yesterday as well: a trip granted at 23:50 that runs an hour
+        does not stop being true at midnight.
+        """
+        for day in (now.date(), now.date() - timedelta(days=1)):
+            until = self.outside_until(day)
+            if until is not None and now < until:
+                return True
+        return False
+
+    def grant_outside(self, now: datetime, minutes: int) -> datetime:
+        """Start the clock. Returns when it runs out."""
+        day = now.date()
+        self.db.ensure_day(day)
+        until = now + timedelta(minutes=minutes)
+        self.db.run(
+            "UPDATE days SET outside_until = ?, outside_used = outside_used + 1"
+            " WHERE date = ?", (until.isoformat(), day.isoformat()))
+        return until
 
     def bed_offset(self, day: date) -> int:
         row = self.db.day(day)

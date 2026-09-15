@@ -236,6 +236,17 @@ REQUIREMENTS = {
         "  and neither does a made-up bed nobody has touched -- the point is that\n"
         "  they are going to sleep now, not that a place to sleep exists.\n"
         "  A visible timestamp is required. Nobody need be in shot."),
+    "outside": (
+        "A photograph showing the person is NOT at their desk -- they are out.\n"
+        "  Any of these settles it: a street, a road, a yard or courtyard, a shop,\n"
+        "  public transport, a park, the entrance hall or stairwell of an\n"
+        "  apartment building (podyezd), a lift, a doorway, a bus stop.\n"
+        "  Daylight or dark both count, and so does bad weather.\n"
+        "  REJECT anything taken indoors at home: a bedroom, a desk, a computer\n"
+        "  or phone screen, a kitchen, a sofa, a ceiling, or a wall with nothing\n"
+        "  to place it. If you cannot tell where it was taken, reject it.\n"
+        "  A visible timestamp is required. Nobody need be in shot, and no face\n"
+        "  should be."),
 }
 
 

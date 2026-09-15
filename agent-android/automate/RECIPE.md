@@ -76,10 +76,12 @@ be asking me for anything?* If not, silence costs nothing.
 - Formula (paste it exactly, brackets and all):
 
   ```
-  ((((dateParts()[3] * 60) + dateParts()[4]) >= (((dateParts()[7] = 0) || (dateParts()[7] = 6)) ? 600 : 970)) && (((dateParts()[3] * 60) + dateParts()[4]) < 1320))
+  (resp != "-1") && ((((dateParts()[3] * 60) + dateParts()[4]) >= (((dateParts()[7] = 0) || (dateParts()[7] = 6)) ? 600 : 970)) && (((dateParts()[3] * 60) + dateParts()[4]) < 1320))
   ```
 
 - `YES` → block 4 (siren, as before). `NO` → **block 7** (quiet minute, then try the network again)
+
+The `resp != "-1"` at the front is the `/outside` excuse. See below.
 
 `dateParts()` is the phone's own clock. `[3]` is the hour 0–23, `[4]` is the
 minute, and `[7]` is the day of the week where **0 is Sunday and 6 is Saturday**.
@@ -117,11 +119,44 @@ Being offline is only suspicious when the server has something to ask for. Befor
 Matching the enforcement window fixes the morning and the 3 a.m. router drop with
 the same test.
 
-What it does **not** cover: going out during the window with no wifi — a Saturday
-afternoon, or a weekday evening — still sirens, because from the phone's side that
-is identical to killing the wifi to dodge a checkpoint. If that becomes a problem,
-the fix is a grace period (only siren after N minutes of continuous failure), not
-a wider quiet zone.
+### Going out inside the window — `/outside`
+
+The window gate does not help on a Saturday afternoon or a weekday evening, when
+something *is* owed and you are genuinely out. From the phone's side that is
+identical to killing the wifi to dodge a checkpoint, so the phone cannot decide
+it. `/outside` decides it in advance instead.
+
+Send `/outside` to the bot **while you still have wifi**, then a photo of the
+street, the yard, the podyezd, the bus stop. If it passes, `/agent/gap` starts
+answering **`-1`** instead of `0`.
+
+That is the whole protocol. `-1` means *nothing is owed, and if you lose me in
+the next little while, stay quiet.* The phone keeps the last answer it was given
+in `resp`, and `resp` is still sitting there on the failure path when the network
+dies — so an answer it received while online is what keeps it silent once offline.
+A minus sign, because the last time this flow needed real parsing it silently did
+nothing for a week.
+
+Two blocks read it:
+
+- **block 3** (`resp != "0" && resp != "-1"`) — don't sound while online either
+- **block 11** (`resp != "-1" && …`) — don't sound when the connection drops
+
+The server stops answering `-1` when the trip runs out (`outside.minutes`, 90 by
+default) or when the enforcement window shuts, whichever is first. Bedtime and the
+missing-plan siren are both outside the window, so an afternoon walk can never buy
+silence at 22:30.
+
+**What it does not buy:** checkpoints. Anything due while you were out still comes
+due and still goes missed. It only stops the noise — which is all it should do,
+because you couldn't have taken a Cold Turkey screenshot from a bus stop anyway.
+
+**Known hole:** if you never come back online, `resp` stays `-1` and the phone
+stays quiet until 22:00 rather than for the 90 minutes the server granted. Closing
+it properly needs the phone to remember *when* it was told, which means a
+`Variable set` block holding `clock("realtime")` and a longer expression in block
+11. Not built, on purpose — this flow has died twice from complexity, and the
+missed checkpoints already land on the record either way.
 
 **2 · HTTP request**
 - Request URL: `https://<your-app>.up.railway.app/agent/gap?token=YOUR_TOKEN`
@@ -131,8 +166,11 @@ a wider quiet zone.
 - Everything else blank
 
 **3 · Expression true?** — is anything owed
-- Formula: `resp != "0"`
+- Formula: `(resp != "0") && (resp != "-1")`
 - `YES` → block 4. `NO` → block 7
+
+`"0"` means nothing is owed. `"-1"` means nothing is owed *and* you told the bot
+you were going out — see block 11. Both are reasons to stay quiet.
 
 **4 · Audio volume set**
 - Stream: **Alarm** ← this is what makes it ring through silent mode and Do Not Disturb
@@ -278,3 +316,28 @@ railway logs --deployment | Select-String Dalvik
 
 A healthy phone shows a request about every 10 seconds when you're behind, and
 once a minute when you're not.
+
+---
+
+## How much mobile data this needs
+
+This phone has no data plan, which is the root of most of the trouble above.
+Measured against the live server on 15 Sep 2026, one poll costs **5.3 KB on the
+wire** -- 4.5 KB of that is downloading Railway's TLS certificate, which happens
+every time because the connection is not kept open. The reply itself is one or
+two bytes.
+
+| what | polls/day | per day | per month |
+|---|---|---|---|
+| data on 24/7, polling once a minute | 1440 | 7.5 MB | **0.22 GB** |
+| the same, plus 2 h/day behind at one poll per 10 s | 2160 | 11.2 MB | **0.33 GB** |
+| only while off wifi -- 8 h school + 2 h out | 600 | 3.1 MB | **0.09 GB** |
+
+So **1 GB a month covers it three times over**, even leaving mobile data on all
+day and being late every day. The siren is a two-byte answer; it is the
+certificate that costs anything.
+
+If a plan that small is ever tight, the cheapest saving is polling less often
+outside the enforcement window -- block 7's delay is 1 minute; at 5 minutes the
+whole thing drops to about 0.02 GB/month. The cost is that coming back online is
+noticed up to 5 minutes late.

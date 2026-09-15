@@ -22,7 +22,11 @@ CREATE TABLE IF NOT EXISTS days (
     extend_minutes    INTEGER NOT NULL DEFAULT 0,
     -- Minutes /latenight bought for this night, and why. 0 on a normal day.
     bed_offset_minutes INTEGER NOT NULL DEFAULT 0,
-    bed_reason        TEXT
+    bed_reason        TEXT,
+    -- /outside: until when the phone may be unreachable without screaming,
+    -- and how many times that was claimed today.
+    outside_until     TEXT,
+    outside_used      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS blocks (
@@ -132,6 +136,12 @@ class Database:
                 "ALTER TABLE days ADD COLUMN bed_offset_minutes INTEGER NOT NULL DEFAULT 0")
         if "bed_reason" not in dhave:
             self.conn.execute("ALTER TABLE days ADD COLUMN bed_reason TEXT")
+        if "outside_until" not in dhave:
+            # How long the phone is allowed to be unreachable without sirening.
+            self.conn.execute("ALTER TABLE days ADD COLUMN outside_until TEXT")
+        if "outside_used" not in dhave:
+            self.conn.execute(
+                "ALTER TABLE days ADD COLUMN outside_used INTEGER NOT NULL DEFAULT 0")
         chave = {r["name"] for r in self.conn.execute("PRAGMA table_info(checkpoints)")}
         if "kind" not in chave:
             self.conn.execute(

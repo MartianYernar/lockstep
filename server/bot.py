@@ -156,6 +156,7 @@ class LockstepBot:
                 BotCommand("more", "the task needs longer"),
                 BotCommand("replan", "rewrite the rest of today"),
                 BotCommand("offset", "push the day back an hour"),
+                BotCommand("outside", "going out — mute the offline siren"),
                 BotCommand("why", "read back your own reasoning"),
                 BotCommand("testsiren", "check the phone alarm works"),
                 BotCommand("help", "all commands"),
@@ -242,6 +243,7 @@ class LockstepBot:
             "/goals — the 3-5 things tomorrow is for. Comes before the plan\n"
             "/done 2 — tick one of them off\n"
             "/latenight reason — 2h past bedtime, once a week, needs a photo\n"
+            "/outside — going out; mutes the offline siren, needs a photo\n"
             "/plan — write the plan for the next day\n"
             "/today — today's goals, plan, and where you stand\n"
             "/status — system state and days remaining\n"
@@ -474,6 +476,55 @@ class LockstepBot:
             "It has to actually show it: friends and where you are, or the work "
             "on screen with a deadline visible. A photo of your ceiling won't do.",
             parse_mode=ParseMode.HTML)
+
+    async def cmd_outside(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Leave the wifi without the phone screaming about it.
+
+        The phone has no mobile data. Walking to the shop looks exactly like
+        killing the wifi to dodge a checkpoint, and the agent -- offline by
+        then -- has no way to tell them apart. So it is settled here, before
+        he goes, with a photo of where he is.
+
+        It buys quiet, not credit. Whatever came due while he was out is still
+        due and still missed; the only thing bought is not being shouted at in
+        the street, where he could not have produced the proof anyway.
+        """
+        if not self._is_user(update):
+            return
+        conf = self.engine.outside_conf()
+        minutes = int(conf.get("minutes", 90))
+        cap = int(conf.get("max_per_day", 2))
+        now = self.cfg.now()
+        today = now.date()
+
+        if not self.engine.in_window(now):
+            await update.message.reply_text(
+                "Nothing is being asked right now, so nobody is going to shout at "
+                "you. Just go.")
+            return
+
+        until = self.engine.outside_until(today)
+        if until is not None and now < until:
+            left = int((until - now).total_seconds() // 60)
+            await update.message.reply_text(
+                f"Already running — <b>{left} min</b> left, until "
+                f"<b>{until:%H:%M}</b>.", parse_mode=ParseMode.HTML)
+            return
+
+        used = self.engine.outside_used(today)
+        if used >= cap:
+            await update.message.reply_text(
+                f"That's {used} of {cap} for today. The cap is the point — an "
+                "excuse you can use all day isn't an excuse, it's an off switch.")
+            return
+
+        self.pending[update.effective_chat.id] = {
+            "action": "outside_photo", "minutes": minutes, "left": cap - used - 1}
+        await update.message.reply_text(
+            "Send a photo of where you are — the street, the yard, the "
+            f"podyezd, the bus stop.\n\nIt buys <b>{minutes} min</b> of silence "
+            "if the connection drops. Anything that was due while you're out is "
+            "still going to be marked missed.", parse_mode=ParseMode.HTML)
 
     async def cmd_plan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -1315,6 +1366,10 @@ class LockstepBot:
             await self._grant_latenight(update, pend, blob, mime, now)
             return
 
+        if pend.get("action") == "outside_photo":
+            await self._grant_outside(update, pend, blob, mime, now)
+            return
+
         if not self.lock.enabled:
             await update.message.reply_text("System is off. Nothing to prove.")
             return
@@ -1441,6 +1496,33 @@ class LockstepBot:
             f"🌙 {self.cfg.user_name} used the weekly late night ({hours}h).\n"
             f"Reason: <i>{html.escape(reason)}</i>\n"
             f"Bedtime tonight moves to {new_bed:%H:%M}.")
+
+    async def _grant_outside(self, update: Update, pend: dict, blob: bytes,
+                             mime: str, now: datetime) -> None:
+        minutes, left = pend["minutes"], pend["left"]
+        await update.message.chat.send_action("typing")
+        verdict = await self.validator.check(
+            blob, "being outside: a street, yard, shop, stairwell or bus stop",
+            "other", now, mime=mime, kind="outside")
+        if not verdict.ok:
+            await update.message.reply_text(
+                f"❌ Not accepted.\n\n{html.escape(verdict.reason)}\n\n"
+                "Step outside and try again — the door, the stairs, the yard.",
+                parse_mode=ParseMode.HTML)
+            return
+
+        self.pending.pop(update.effective_chat.id, None)
+        until = self.engine.grant_outside(now, minutes)
+        self._save_photo(blob, now.date(), "outside")
+        self.ledger.append("outside_granted",
+                           {"date": now.date().isoformat(), "minutes": minutes,
+                            "until": until.isoformat()})
+        await update.message.reply_text(
+            f"🚶 <b>Quiet until {until:%H:%M}.</b>\n\n"
+            "Losing the connection won't set the siren off until then. "
+            f"{left} left today.\n\n"
+            "Checkpoints still come due while you're out, and still go missed. "
+            "This only stops the noise.", parse_mode=ParseMode.HTML)
 
     def _save_photo(self, blob: bytes, day: date, tag: str) -> str | None:
         """Keep what the policy allows and no more.
@@ -1836,7 +1918,7 @@ class LockstepBot:
             ("start", self.cmd_start), ("help", self.cmd_help), ("status", self.cmd_status),
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
             ("goals", self.cmd_goals), ("done", self.cmd_done),
-            ("latenight", self.cmd_latenight),
+            ("latenight", self.cmd_latenight), ("outside", self.cmd_outside),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),

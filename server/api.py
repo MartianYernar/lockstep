@@ -126,6 +126,20 @@ def build_app(cfg, engine, ledger) -> web.Application:
         now = cfg.now()
         engine.db.set_lock(last_agent_poll=now.isoformat())
         _note_battery(request, engine, now)
+        # "-1" means: nothing owed, AND if you lose me shortly, stay quiet.
+        #
+        # The phone cannot ask anything once it is offline, which is exactly
+        # when the fail-closed siren fires. So the answer has to be handed over
+        # in advance and remembered. The agent keeps the last thing it was told
+        # and reads it again on the failure path; a minus sign is the whole
+        # protocol, because the last time this needed parsing it silently did
+        # nothing for a week.
+        #
+        # Bounded to the enforcement window on purpose: bedtime and the missing
+        # plan are both outside it, so an afternoon walk can never buy silence
+        # at 22:30.
+        if engine.outside_active(now) and engine.in_window(now):
+            return web.Response(text="-1", content_type="text/plain")
         st = engine.agent_state(now).as_dict()
         if not st["phone_alarm"]:
             return web.Response(text="0", content_type="text/plain")
