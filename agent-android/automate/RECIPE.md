@@ -107,6 +107,44 @@ them here too or the two will disagree.
 If Automate underlines `dateParts()` as an error for taking no arguments, write
 `dateParts(clock("realtime"))` everywhere instead; it means the same thing.
 
+**2 · HTTP request**
+- Request URL: `https://<your-app>.up.railway.app/agent/gap?token=YOUR_TOKEN`
+- Request method: **GET**
+- Save response: **Save to variable as text** (the radio button has to be selected)
+- Output variables → **Response content or filename**: `resp`
+- Everything else blank
+
+**3 · Expression true?** — is anything owed
+- Formula: `(resp != "0") && (resp != "-1")`
+- `YES` → block 4. `NO` → block 7
+
+`"0"` means nothing is owed. `"-1"` means nothing is owed *and* you told the bot
+you were going out — see block 11. Both are reasons to stay quiet.
+
+**4 · Audio volume set**
+- Stream: **Alarm** ← this is what makes it ring through silent mode and Do Not Disturb
+- Volume: 90
+
+**5 · Vibrate**
+- Pattern: long
+
+**6 · Tone play**
+- Tone: **CDMA network busy** (long and harsh; the default *CDMA abbr alert* is a polite single beep)
+- Audio stream: **Alarm**
+- Volume: 100 (block 4 already sets the Alarm slider, and the two multiply)
+- Duration: 3000
+- Proceed: the option that waits until the tone finishes, not *Immediately*
+
+**8 · Delay** (the siren path)
+- Duration, via the **fx** button: `max(resp, 10)`
+- Tick **awake**
+- `OK` → back to block 2
+
+**7 · Delay** (the quiet path)
+- Duration: 1 minute
+- Tick **awake**
+- `OK` → back to block 2
+
 ### Why the window and not just night hours
 
 The first version of this block used plain night hours: quiet 22:00–07:00 on
@@ -157,44 +195,6 @@ it properly needs the phone to remember *when* it was told, which means a
 `Variable set` block holding `clock("realtime")` and a longer expression in block
 11. Not built, on purpose — this flow has died twice from complexity, and the
 missed checkpoints already land on the record either way.
-
-**2 · HTTP request**
-- Request URL: `https://<your-app>.up.railway.app/agent/gap?token=YOUR_TOKEN`
-- Request method: **GET**
-- Save response: **Save to variable as text** (the radio button has to be selected)
-- Output variables → **Response content or filename**: `resp`
-- Everything else blank
-
-**3 · Expression true?** — is anything owed
-- Formula: `(resp != "0") && (resp != "-1")`
-- `YES` → block 4. `NO` → block 7
-
-`"0"` means nothing is owed. `"-1"` means nothing is owed *and* you told the bot
-you were going out — see block 11. Both are reasons to stay quiet.
-
-**4 · Audio volume set**
-- Stream: **Alarm** ← this is what makes it ring through silent mode and Do Not Disturb
-- Volume: 90
-
-**5 · Vibrate**
-- Pattern: long
-
-**6 · Tone play**
-- Tone: **CDMA network busy** (long and harsh; the default *CDMA abbr alert* is a polite single beep)
-- Audio stream: **Alarm**
-- Volume: 100 (block 4 already sets the Alarm slider, and the two multiply)
-- Duration: 3000
-- Proceed: the option that waits until the tone finishes, not *Immediately*
-
-**8 · Delay** (the siren path)
-- Duration, via the **fx** button: `max(resp, 10)`
-- Tick **awake**
-- `OK` → back to block 2
-
-**7 · Delay** (the quiet path)
-- Duration: 1 minute
-- Tick **awake**
-- `OK` → back to block 2
 
 ### Why it's built this way
 
