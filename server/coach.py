@@ -230,7 +230,13 @@ class Coach:
                 resp = await self._client.aio.models.generate_content(
                     model=model, contents=contents, config=cfg)
                 self._charge(now.date())
-                return (resp.text or "").strip()
+                text = (resp.text or "").strip()
+                if text:
+                    return text
+                # Seen live: a reply with nothing but a thought signature in it.
+                # It still cost an allowance, but it is not an answer.
+                log.warning("coach: %s returned nothing, next model", model)
+                continue
             except Exception as exc:                          # noqa: BLE001
                 last = exc
                 text = str(exc)
