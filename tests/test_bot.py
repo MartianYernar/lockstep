@@ -134,7 +134,7 @@ g = bot.app.bot.to(GUARDIAN)
 check("father is told", len(g), 1)
 check("his exact words are forwarded", "fever and cannot do any of this" in g[0], True)
 check("father is told the command", "/stopbot" in g[0], True)
-check("father is told he may simply ignore it", "do nothing at all" in g[0], True)
+check("father is told he may simply ignore it", "do nothing" in g[0].lower(), True)
 check("system is still on — asking is not stopping", lk.enabled, True)
 
 print("\n=== you cannot stop it yourself, by any route ===")
@@ -200,11 +200,11 @@ eng.build_checkpoints(today, cfg.now())
 
 u = FakeUpdate("/offset x")
 run(bot.cmd_offset(u, None))
-check("a one-word reason is refused", "actually happened" in u.message.last, True)
+check("a one-word reason is refused", "what happened" in u.message.last.lower(), True)
 
 u = FakeUpdate("/offset stayed back for a department meeting after class")
 run(bot.cmd_offset(u, None))
-check("asks for photo proof", "send one photo" in u.message.last.lower(), True)
+check("asks for photo proof", "photo of where you are" in u.message.last.lower(), True)
 check("pending proof state", bot.pending[USER]["action"], "offset_proof")
 
 u = FakeUpdate("/offset another reason entirely, second try today")
@@ -324,7 +324,7 @@ run(bot.send_user("checkpoint due"))
 check("block detected", db.lock()["blocked_since"] is not None, True)
 g = bot.app.bot.to(GUARDIAN)
 check("father is told immediately", len(g), 1)
-check("told it needed no password", "no password" in g[0], True)
+check("told it needed no password", "no password" in g[0].lower(), True)
 check("told the siren keeps running", "keep going" in g[0], True)
 check("recorded in the tamper-evident log",
       "bot_blocked" in [r["kind"] for r in db.q("SELECT kind FROM events")], True)
@@ -395,7 +395,7 @@ eng.build_checkpoints(today, datetime.combine(today, datetime.min.time(),
 
 u = FakeUpdate("/more 30")
 run(bot.cmd_more(u, None))
-check("refused before you've proven you're on it", "photo of" in u.message.last, True)
+check("refused before you've proven you're on it", "photo of" in u.message.last.lower(), True)
 check("nothing moved", [b["end_min"] for b in db.blocks(today)], [18*60, 20*60, 22*60])
 
 # prove it
