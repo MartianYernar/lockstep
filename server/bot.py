@@ -43,6 +43,8 @@ class LockstepBot:
         self.engine = engine
         self.lock = lock
         self.validator = validator
+        from .coach import Coach
+        self.coach = Coach(cfg, db, engine)
         self.pending: dict[int, dict] = {}      # chat_id -> {"action": ..., ...}
         self.seen_strangers: dict[int, str] = {}
         self.last_level: int = 0
@@ -132,7 +134,8 @@ class LockstepBot:
     # reporting it. These are plain reply keyboards: tapping one sends the same
     # text you would have typed, so every existing handler works unchanged.
     # ======================================================================
-    USER_KEYS = [["/today", "/goals"], ["/plan", "/done"], ["/status", "/help"]]
+    USER_KEYS = [["/today", "/goals"], ["/plan", "/steps"],
+                 ["/done", "/status"], ["/outside", "/help"]]
     GUARDIAN_KEYS = [["/report", "/status"], ["/pause 24 ", "/resume"], ["/help"]]
 
     def _keyboard(self, update: Update) -> ReplyKeyboardMarkup:
@@ -151,6 +154,7 @@ class LockstepBot:
                 BotCommand("today", "today's goals, plan and score"),
                 BotCommand("goals", "the 3-5 things tomorrow is for"),
                 BotCommand("done", "tick off a goal"),
+                BotCommand("steps", "break this task into small steps"),
                 BotCommand("plan", "write tomorrow's timetable"),
                 BotCommand("status", "system state and days left"),
                 BotCommand("more", "the task needs longer"),
@@ -177,9 +181,12 @@ class LockstepBot:
             log.warning("could not publish the command menu: %s", exc)
 
     async def on_button(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        """Inline buttons. Currently only ticking off a goal."""
+        """Inline buttons: ticking off a goal, or a step of a block."""
         q = update.callback_query
         await q.answer()
+        if q.data.startswith("step:"):
+            await self._on_step_button(q)
+            return
         if not q.data.startswith("done:"):
             return
         today = self.cfg.now().date()
@@ -192,6 +199,19 @@ class LockstepBot:
             f"{self._goals_text(today)}\n\n<b>{hit}/{len(rows)}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=self._goal_buttons(today))
+
+    async def _on_step_button(self, q) -> None:
+        day = self.cfg.now().date()
+        _, bi, idx = q.data.split(":", 2)
+        blocks = self.db.blocks(day)
+        try:
+            label = blocks[int(bi)]["label"]
+        except (IndexError, ValueError):
+            return
+        self.coach.tick_step(day, label, int(idx), True)
+        await q.edit_message_text(
+            self._render_steps(day, label), parse_mode=ParseMode.HTML,
+            reply_markup=self._step_buttons(day, int(bi), label))
 
     def _goal_buttons(self, day: date) -> InlineKeyboardMarkup | None:
         left = [g for g in self.db.goals(day) if not g["done"]]
@@ -244,6 +264,9 @@ class LockstepBot:
             "/done 2 — tick one of them off\n"
             "/latenight reason — 2h past bedtime, once a week, needs a photo\n"
             "/outside — going out; mutes the offline siren, needs a photo\n"
+            "/steps — break the current task into steps you can start\n"
+            "…or just type. Anything that isn't a command goes to the coach,\n"
+            "which can see today's real numbers and can change none of them\n"
             "/plan — write the plan for the next day\n"
             "/today — today's goals, plan, and where you stand\n"
             "/status — system state and days remaining\n"
@@ -525,6 +548,96 @@ class LockstepBot:
             f"podyezd, the bus stop.\n\nIt buys <b>{minutes} min</b> of silence "
             "if the connection drops. Anything that was due while you're out is "
             "still going to be marked missed.", parse_mode=ParseMode.HTML)
+
+    def _block_for_steps(self, arg: str, now: datetime):
+        """The block he means: the one running now, or the nth of the day."""
+        blocks = self.db.blocks(now.date())
+        if not blocks:
+            return None
+        if arg.strip().isdigit():
+            i = int(arg.strip())
+            return blocks[i - 1] if 1 <= i <= len(blocks) else None
+        minute = now.hour * 60 + now.minute
+        here = next((b for b in blocks
+                     if b["start_min"] <= minute < b["end_min"]), None)
+        if here is not None:
+            return here
+        return next((b for b in blocks if b["start_min"] >= minute), None)
+
+    async def cmd_steps(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Turn one block into steps small enough that the first one is obvious.
+
+        The failure this is for is not laziness, it is a block called "work:
+        analysing" at 16:10 with nothing to actually put your hands on. Sitting
+        in front of that for twenty minutes reads as defiance on the record and
+        is really just not knowing where to start.
+        """
+        if not self._is_user(update):
+            return
+        if not self.coach.enabled:
+            await update.message.reply_text("The coach is switched off in config.")
+            return
+        now = self.cfg.now()
+        arg = update.message.text.partition(" ")[2]
+        block = self._block_for_steps(arg, now)
+        if block is None:
+            await update.message.reply_text(
+                "No block to break down. Send /plan first, or /steps 2 for the "
+                "second block of the day.")
+            return
+
+        cached = bool(self.coach.steps_for(now.date(), block["label"]))
+        if not cached and self.coach.budget_left(now.date()) <= 0:
+            await update.message.reply_text(
+                "The coach has used today's allowance. It shares a quota with the "
+                "photo checks, and those come first.")
+            return
+
+        await update.message.chat.send_action("typing")
+        try:
+            steps = await self.coach.breakdown(block, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("coach breakdown failed: %s", exc)
+            await update.message.reply_text(
+                "Couldn't reach the coach just now. Start with the smallest "
+                "piece of it you can name.")
+            return
+        if not steps:
+            await update.message.reply_text("Got nothing useful back. Try again.")
+            return
+        blocks = self.db.blocks(now.date())
+        bi = next((i for i, b in enumerate(blocks) if b["id"] == block["id"]), 0)
+        await update.message.reply_text(
+            self._render_steps(now.date(), block["label"]),
+            parse_mode=ParseMode.HTML,
+            reply_markup=self._step_buttons(now.date(), bi, block["label"]))
+
+    def _render_steps(self, day: date, label: str) -> str:
+        rows = self.coach.steps_for(day, label)
+        done = sum(1 for r in rows if r["done"])
+        head = f"<b>{html.escape(label)}</b> — {done}/{len(rows)} done\n"
+        body = "\n".join(
+            ("✅ <s>" + html.escape(r["text"]) + "</s>") if r["done"]
+            else f"<b>{r['idx']}.</b> {html.escape(r['text'])}"
+            for r in rows)
+        return head + body
+
+    def _step_buttons(self, day: date, bi: int, label: str) -> InlineKeyboardMarkup | None:
+        """Tick-off buttons. The callback carries the block's POSITION in the
+        day, not its label -- labels are long and Telegram allows 64 bytes, and
+        a position still resolves after the bot restarts."""
+        open_ = [r for r in self.coach.steps_for(day, label) if not r["done"]]
+        if not open_:
+            return None
+        keys, line = [], []
+        for r in open_:
+            line.append(InlineKeyboardButton(f"✓ {r['idx']}",
+                                             callback_data=f"step:{bi}:{r['idx']}"))
+            if len(line) == 4:
+                keys.append(line); line = []
+        if line:
+            keys.append(line)
+        return InlineKeyboardMarkup(keys)
 
     async def cmd_plan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -1568,7 +1681,7 @@ class LockstepBot:
             return
 
         if self._is_user(update):
-            await update.message.reply_text("Send a photo, or /help.")
+            await self._talk(update, text)
             return
 
         # A stranger. Almost always the guardian saying hello before anyone has
@@ -1586,6 +1699,36 @@ class LockstepBot:
                 f"👤 <b>{html.escape(name)}</b> just messaged the bot "
                 f"(<code>{chat.id}</code>) and isn't registered.\n\n"
                 f"If that's your father:\n<code>/setguardian {chat.id}</code>")
+
+    async def _talk(self, update: Update, text: str) -> None:
+        """Anything he types that isn't a command or a plan goes to the coach.
+
+        It is handed today's real numbers before it sees a word he wrote, so it
+        cannot be told the day went well. And it can change nothing: no
+        checkpoint, no deadline, no siren. Talk is not proof, and a coach that
+        could let you off would be the easiest off-switch in the system.
+        """
+        if not self.coach.enabled:
+            await update.message.reply_text("Send a photo, or /help.")
+            return
+        now = self.cfg.now()
+        if self.coach.budget_left(now.date()) <= 0:
+            await update.message.reply_text(
+                "The coach has used today's allowance — it shares a quota with "
+                "the photo checks, and those come first. Back tomorrow.")
+            return
+        await update.message.chat.send_action("typing")
+        try:
+            out = await self.coach.reply(text, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("coach reply failed: %s", exc)
+            await update.message.reply_text(
+                "Couldn't reach the coach. /help for what still works.")
+            return
+        if not out:
+            await update.message.reply_text("Nothing useful came back. Say it again?")
+            return
+        await update.message.reply_text(out[:3900])
 
     # ======================================================================
     # the tick
@@ -1919,6 +2062,7 @@ class LockstepBot:
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
             ("goals", self.cmd_goals), ("done", self.cmd_done),
             ("latenight", self.cmd_latenight), ("outside", self.cmd_outside),
+            ("steps", self.cmd_steps),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),

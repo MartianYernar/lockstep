@@ -44,6 +44,15 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   policy. Nothing generates the `blocker_allow` checkpoint it hangs off. Wire it
   back in `engine._block_start_times` when a scope shot can be taken without a
   fight.
+- **The coach can talk but cannot act.** `server/coach.py` breaks a block into
+  steps and answers free text in Telegram. It is handed the day's real numbers
+  from the database before it sees a word he wrote, so it cannot be told the day
+  went well. It can satisfy no checkpoint, move no deadline and stop no siren --
+  a coach that could let him off would be the easiest off-switch in the system.
+  It also shares one Gemini free-tier quota with the photo checks, which are the
+  only thing that enforces anything, so it runs on the TAIL of the model chain
+  and stops at `coach.max_calls_per_day`. If you touch this, keep both of those:
+  no write access to the record, and the camera eats first.
 - **No passwords anywhere.** The guardian is a Telegram chat id. Passwords get
   forgotten; this project already lost one that way.
 - **Stopping is a delay, not a wall.** `/stopbot` schedules it 24 hours out.
