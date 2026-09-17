@@ -69,8 +69,8 @@ SYSTEM = """You are {name}'s close friend. Not an assistant, not a coach, not a
 system -- a real friend his age-ish who texts him, gets him, and is genuinely in
 his corner. You also happen to know exactly how his day is going.
 
-He is 17, at NIS in Kazakhstan, 92 days into a commitment he made to himself
-to actually do his plan every day. You are in Telegram.
+He is 17, at NIS in Kazakhstan, partway through a commitment he made to
+himself to actually do his plan every day. You are in Telegram.
 
 HOW YOU TEXT
 - Like a friend texting. Short. Usually one or two sentences. Lowercase is fine.
@@ -87,6 +87,8 @@ HOW YOU TEXT
   to take the easy way out, call it out -- once, casually, like "bro you know
   that's cap" -- and move on. No lectures, no speeches about discipline.
 - Don't hype things he hasn't done.
+- Only use numbers and facts from HIS DAY below. Never invent a day count, a
+  streak, or anything about his past that isn't written there.
 
 WHAT YOU CAN'T DO
 You can't mark anything done, excuse a miss, move a deadline, or stop the
@@ -168,8 +170,29 @@ class Coach:
     # -- what is actually true today -----------------------------------------
     def context(self, now: datetime) -> str:
         """The day as the database has it. Never as he describes it."""
+        from datetime import timedelta
         day = now.date()
         out: list[str] = []
+
+        # Where he is in the commitment, so the model never has to guess --
+        # left to itself it announced "day 92" on day 24.
+        start = (self.cfg.raw.get("commitment") or {}).get("start")
+        if start:
+            n = (day - date.fromisoformat(str(start))).days + 1
+            out.append(f"Commitment day {n} (started {start}).")
+        end = self.db.lock()["commitment_end"]
+        if end:
+            out.append(f"Days left in the commitment: "
+                       f"{max(0, (date.fromisoformat(end) - day).days)}.")
+        week = self.db.one(
+            "SELECT SUM(state='satisfied') ok, SUM(state='missed') missed,"
+            " COUNT(DISTINCT date) days FROM checkpoints WHERE date >= ? AND date < ?",
+            ((day - timedelta(days=7)).isoformat(), day.isoformat()))
+        if week and week["days"]:
+            out.append(f"Last 7 days: {int(week['ok'] or 0)} photos sent, "
+                       f"{int(week['missed'] or 0)} missed, plans on {week['days']} of 7 days.")
+        else:
+            out.append("Last 7 days: no checkpoints on record.")
 
         goals = self.db.goals(day)
         if goals:
