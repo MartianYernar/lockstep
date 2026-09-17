@@ -1990,8 +1990,13 @@ class LockstepBot:
             out = await self.coach.reply(text, now)
         except Exception as exc:                              # noqa: BLE001
             log.warning("coach reply failed: %s", exc)
+            busy = any(k in str(exc) for k in ("RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE"))
             await update.message.reply_text(
-                "can't think straight rn, message me again in a bit")
+                "the AI I run on is maxed out rn 😩 try me again in a bit. "
+                "photos still get checked, and /replan still works"
+                if busy else
+                "something broke on my end, try again in a minute. "
+                "/replan and photos still work")
             return
         edits, self.coach.last_plan_edits = self.coach.last_plan_edits, []
         prepared = self._prepare_chat_plan(edits[0], now) if edits else None

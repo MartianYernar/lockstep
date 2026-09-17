@@ -352,32 +352,40 @@ class Validator:
         # a second allowance rather than a way around one limit. It doubles as
         # plain robustness: if one model is having a bad day, the check still
         # happens instead of silently passing everything through unverified.
-        cfg = types.GenerateContentConfig(
-            temperature=0.0,
-            response_mime_type="application/json",
-            response_schema=RESPONSE_SCHEMA,
-            **extra,
-        )
+        def config(with_thinking: bool):
+            return types.GenerateContentConfig(
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=RESPONSE_SCHEMA,
+                **(extra if with_thinking else {}),
+            )
+
+        contents = [types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt]
         last: Exception | None = None
         for model in self._model_chain():
-            try:
-                resp = await client.aio.models.generate_content(
-                    model=model,
-                    contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime),
-                              prompt],
-                    config=cfg,
-                )
-                if model != self._model_chain()[0]:
-                    log.info("fell back to %s", model)
-                self.last_model = model
-                return json.loads(resp.text)
-            except Exception as exc:                          # noqa: BLE001
-                last = exc
-                text = str(exc)
-                if "RESOURCE_EXHAUSTED" in text or "429" in text:
-                    log.warning("%s out of quota, trying the next model", model)
-                    continue
-                raise
+            # Some models refuse thinking_budget=0 outright (400, measured on
+            # 17 Sep for flash-lite-latest and 3.5-flash-lite). That used to
+            # raise and end the chain, so the moment the first model ran out of
+            # quota every photo check failed. Retry the same model without it.
+            for with_thinking in ((True, False) if extra else (False,)):
+                try:
+                    resp = await client.aio.models.generate_content(
+                        model=model, contents=contents, config=config(with_thinking))
+                    if model != self._model_chain()[0]:
+                        log.info("fell back to %s", model)
+                    self.last_model = model
+                    return json.loads(resp.text)
+                except Exception as exc:                      # noqa: BLE001
+                    last = exc
+                    text = str(exc)
+                    if with_thinking and "INVALID_ARGUMENT" in text:
+                        continue
+                    if any(k in text for k in ("RESOURCE_EXHAUSTED", "429",
+                                               "UNAVAILABLE", "503", "INVALID_ARGUMENT")):
+                        log.warning("%s unusable (%s), trying the next model",
+                                    model, text.split(".")[0][:40])
+                        break
+                    raise
         raise last if last else RuntimeError("no models configured")
 
     async def check(self, image_bytes: bytes, label: str, category: str,

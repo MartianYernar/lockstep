@@ -269,41 +269,47 @@ class Coach:
         extra = {}
         if schema is not None:
             extra = {"response_mime_type": "application/json", "response_schema": schema}
-        cfg = types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=float(self.conf.get("temperature", 0.7)),
-            max_output_tokens=max_tokens,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-            **extra,
-        )
+
+        def config(with_thinking: bool):
+            more = ({"thinking_config": types.ThinkingConfig(thinking_budget=0)}
+                    if with_thinking else {})
+            return types.GenerateContentConfig(
+                system_instruction=system,
+                temperature=float(self.conf.get("temperature", 0.7)),
+                max_output_tokens=max_tokens,
+                **extra, **more,
+            )
+
         last: Exception | None = None
         for model in self._models():
-            try:
-                resp = await self._client.aio.models.generate_content(
-                    model=model, contents=contents, config=cfg)
-                self._charge(now.date())
-                text = (resp.text or "").strip()
-                if text:
-                    return text
-                # Seen live: a reply with nothing but a thought signature in it.
-                # It still cost an allowance, but it is not an answer.
-                log.warning("coach: %s returned nothing, next model", model)
-                continue
-            except Exception as exc:                          # noqa: BLE001
-                last = exc
-                text = str(exc)
-                # Out of allowance (429) or the model is simply busy (503).
-                # Both are "ask a different one", and 503 is the common case on
-                # the free tier -- the first smoke test against the real API hit
-                # it, and without this the whole feature died on one busy model.
-                # Vision survives 503 through its own retry loop; walking the
-                # chain IS the coach's retry loop.
-                if any(k in text for k in
-                       ("RESOURCE_EXHAUSTED", "429", "UNAVAILABLE", "503")):
-                    log.warning("coach: %s unavailable (%s), next model",
-                                model, text.split(".")[0][:40])
-                    continue
-                raise
+            # Thinking off first (cheaper); some models reject that with a
+            # 400, so the same model is asked again without it.
+            for with_thinking in (True, False):
+                try:
+                    resp = await self._client.aio.models.generate_content(
+                        model=model, contents=contents, config=config(with_thinking))
+                    self._charge(now.date())
+                    text = (resp.text or "").strip()
+                    if text:
+                        return text
+                    # Seen live: a reply with nothing but a thought signature.
+                    # It still cost an allowance, but it is not an answer.
+                    log.warning("coach: %s returned nothing, next model", model)
+                    break
+                except Exception as exc:                      # noqa: BLE001
+                    last = exc
+                    text = str(exc)
+                    if with_thinking and "INVALID_ARGUMENT" in text:
+                        continue
+                    # Out of allowance (429), busy (503), or refusing the
+                    # request shape (400): all mean "ask a different model".
+                    # Walking the chain IS the coach's retry loop.
+                    if any(k in text for k in ("RESOURCE_EXHAUSTED", "429", "UNAVAILABLE",
+                                               "503", "INVALID_ARGUMENT", "400")):
+                        log.warning("coach: %s unusable (%s), next model",
+                                    model, text.split(".")[0][:40])
+                        break
+                    raise
         raise last if last else RuntimeError("no coach models configured")
 
     # -- breaking a block down ------------------------------------------------
