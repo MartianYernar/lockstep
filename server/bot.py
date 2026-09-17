@@ -45,6 +45,11 @@ class LockstepBot:
         from .coach import Coach
         self.coach = Coach(cfg, db, engine)
         self.tasks = self.coach.tasks
+        self.foundations = self.coach.foundations
+        try:
+            self.coach.terms.seed(cfg.raw.get("terms"), cfg.now())
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("term seed failed: %s", exc)
         # The last photo the checker turned down, held in memory only, so he can
         # explain it instead of re-shooting. Never written to disk.
         self.last_reject: dict | None = None
@@ -162,6 +167,7 @@ class LockstepBot:
                 BotCommand("steps", "break this task into small steps"),
                 BotCommand("tasks", "your big tasks and deadlines"),
                 BotCommand("events", "meetings and events coming up"),
+                BotCommand("night", "tonight's basics: socks, clothes, teeth"),
                 BotCommand("plan", "write tomorrow's timetable"),
                 BotCommand("status", "system state and days left"),
                 BotCommand("more", "the task needs longer"),
@@ -196,6 +202,9 @@ class LockstepBot:
             return
         if q.data.startswith("task:"):
             await self._on_task_button(q)
+            return
+        if q.data.startswith("basic:"):
+            await self._on_basic_button(q)
             return
         if not q.data.startswith("done:"):
             return
@@ -1061,12 +1070,78 @@ class LockstepBot:
     # ======================================================================
     # speaking first
     # ======================================================================
+    # ======================================================================
+    # the nightly basics
+    # ======================================================================
+    def _foundations_text(self, day: date, heading: str) -> str:
+        rows = self.foundations.for_day(day)
+        left = [r for r in rows if not r["done_at"]]
+        lines = [("✅ " if r["done_at"] else "▫️ ") + html.escape(r["text"]) for r in rows]
+        tail = ("all done 🙌 good night stuff sorted" if not left
+                else "tap when done, or just tell me")
+        return f"{heading}\n\n" + "\n".join(lines) + f"\n\n{tail}"
+
+    def _foundations_buttons(self, day: date) -> InlineKeyboardMarkup | None:
+        left = self.foundations.left(day)
+        if not left:
+            return None
+        return InlineKeyboardMarkup([[InlineKeyboardButton(
+            f"✓ {r['text']}", callback_data=f"basic:{day.isoformat()}:{r['idx']}")]
+            for r in left])
+
+    async def _send_foundations(self, day: date, heading: str) -> None:
+        try:
+            await self.app.bot.send_message(
+                self.cfg.user_chat_id, self._foundations_text(day, heading),
+                parse_mode=ParseMode.HTML, reply_markup=self._foundations_buttons(day))
+        except Forbidden:
+            await self._on_blocked()
+
+    async def _foundations_tick(self, now: datetime) -> None:
+        f = self.foundations
+        if not f.enabled:
+            return
+        day = now.date()
+        minute = now.hour * 60 + now.minute
+        at = _hhmm(f.conf.get("at", "21:50"))
+        nudge = _hhmm(f.conf.get("nudge_at", "22:15"))
+        at_min, nudge_min = at.hour * 60 + at.minute, nudge.hour * 60 + nudge.minute
+        if at_min <= minute < at_min + 60 and self.db.claim(f"basics:{day}"):
+            await self._send_foundations(day, "end of day basics 🧦🦷")
+        elif (nudge_min <= minute < nudge_min + 60 and f.left(day)
+              and self.db.claim(f"basics-nudge:{day}")):
+            names = ", ".join(r["text"] for r in f.left(day))
+            await self._send_foundations(day, f"before bed — still left: {html.escape(names)}")
+
+    async def cmd_night(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        day = self.foundations.night_of(self.cfg.now())
+        await update.message.reply_text(
+            self._foundations_text(day, "tonight's basics"), parse_mode=ParseMode.HTML,
+            reply_markup=self._foundations_buttons(day))
+
+    async def _on_basic_button(self, q) -> None:
+        _, d, idx = q.data.split(":", 2)
+        day = date.fromisoformat(d)
+        now = self.cfg.now()
+        if self.foundations.tick(day, int(idx), now):
+            self.ledger.append("basic_done", {"date": d, "idx": int(idx)})
+        await q.edit_message_text(
+            self._foundations_text(day, "end of day basics 🧦🦷"), parse_mode=ParseMode.HTML,
+            reply_markup=self._foundations_buttons(day))
+
     async def _friend_tick(self, now: datetime) -> None:
         conf = self.cfg.raw.get("friend", {}) or {}
         if not conf.get("enabled", True) or not self.lock.enabled:
             return
         day = now.date()
         minute = now.hour * 60 + now.minute
+
+        try:
+            await self._foundations_tick(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("foundations tick failed: %s", exc)
 
         # before the window: what's on his plate
         at = self.cfg.enforce_start_for(day) - int(conf.get("brief_minutes_before", 20))
@@ -2484,6 +2559,11 @@ class LockstepBot:
                       for g in goals]
         else:
             lines.append("\n▫️ No goals were set for this day.")
+        if self.foundations.enabled:
+            rows = self.foundations.for_day(day)
+            hit = sum(1 for r in rows if r["done_at"])
+            lines.append(f"Basics {hit}/{len(rows)}: " + ", ".join(
+                ("✅ " if r["done_at"] else "▫️ ") + html.escape(r["text"]) for r in rows))
         if row and row["offsets_used"]:
             lines.append(f"Offset used: {html.escape(row['offset_reason'] or '')}")
         if not (row and row["plan_locked"]):
@@ -2511,6 +2591,7 @@ class LockstepBot:
             ("steps", self.cmd_steps),
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
             ("events", self.cmd_reminders),
+            ("night", self.cmd_night), ("basics", self.cmd_night),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),

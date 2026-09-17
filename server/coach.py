@@ -132,6 +132,8 @@ class Coach:
         from .tasks import Tasks, Terms
         self.tasks = Tasks(db)
         self.terms = Terms(db)
+        from .foundations import Foundations
+        self.foundations = Foundations(db, cfg)
         self.last_recheck: str | None = None
 
     # -- config ---------------------------------------------------------------
@@ -239,6 +241,11 @@ class Coach:
         if terms:
             out.append("His shorthand: " + "; ".join(
                 f"{t['term']} = {t['meaning']}" for t in terms))
+
+        if self.foundations.enabled:
+            night = self.foundations.night_of(now)
+            out.append("Tonight's basics (end-of-day checklist): "
+                       + self.foundations.describe(night))
 
         big = self.tasks.describe(day)
         out.append("His big tasks (the long-running ones):")
@@ -452,6 +459,11 @@ class Coach:
                         note = (a.get("text") or "").strip()
                         if note and self.tasks.note(t["id"], note):
                             done.append(f"noted on {t['title']}")
+                elif kind == "tick_basic":
+                    night = self.foundations.night_of(now)
+                    row = self.foundations.find(night, a.get("text") or a.get("title") or "")
+                    if row and self.foundations.tick(night, row["idx"], now):
+                        done.append(f"ticked: {row['text']} ✅")
                 elif kind == "define":
                     term = (a.get("title") or a.get("task") or "").strip()
                     if self.terms.set(term, a.get("text") or "", now):
@@ -527,6 +539,8 @@ actually told you, never guessed:
 - {"type":"complete_task","task":"#id or title"}  he finished one
 - {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
 - {"type":"add_note","task":"#id or title","text":...}  progress he described
+- {"type":"tick_basic","text":"socks" / "clothes" / "mouth"}  when he says he
+  did one of tonight's basics (washed socks, laid out clothes, brushed teeth).
 - {"type":"define","title":"рнкп","text":"what it means"}  when he explains one of
   his own abbreviations or what a block name really is. The photo checker uses
   these, so it stops rejecting good photos over a word it doesn't know.
@@ -557,7 +571,7 @@ REPLY_SCHEMA = {
             "properties": {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
-                    "edit_plan", "define", "recheck_photo"]},
+                    "edit_plan", "define", "recheck_photo", "tick_basic"]},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
                 "text": {"type": "STRING"}, "date": {"type": "STRING"},

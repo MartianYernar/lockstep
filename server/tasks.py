@@ -198,6 +198,15 @@ class Terms:
                     (term, meaning[:200], now.isoformat()))
         return True
 
+    def seed(self, mapping, now: datetime) -> int:
+        n = 0
+        for term, meaning in (mapping or {}).items():
+            term, meaning = str(term).strip().lower(), str(meaning).strip()
+            if term and meaning:
+                n += self.db.run("INSERT OR IGNORE INTO terms (term, meaning, updated_at)"
+                                 " VALUES (?, ?, ?)", (term, meaning, now.isoformat())).rowcount
+        return n
+
     def all(self) -> list:
         return self.db.q("SELECT * FROM terms ORDER BY term")
 
