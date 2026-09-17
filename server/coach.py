@@ -135,6 +135,7 @@ class Coach:
         from .foundations import Foundations
         self.foundations = Foundations(db, cfg)
         self.last_recheck: str | None = None
+        self.last_judge_was_reason = True
 
     # -- config ---------------------------------------------------------------
     @property
@@ -234,8 +235,12 @@ class Coach:
 
         debt = self.engine.debt_seconds(day, now)
         if debt > 0:
+            cp = self.engine.current_checkpoint(day, now)
+            what = (f" for the block \"{cp['label']}\" (due {cp['due_at'][11:16]})"
+                    if cp is not None and cp["label"] else "")
             out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind. "
-                       f"The siren is going. He owes a photo. **")
+                       f"The siren is going. He owes a photo{what}. When you mention "
+                       f"it, name that block so he knows which pic. **")
 
         terms = self.terms.all()
         if terms:
@@ -509,6 +514,7 @@ class Coach:
             [types.Content(role="user", parts=parts)], now,
             max_tokens=300, schema=JUDGE_SCHEMA)
         data = json.loads(raw)
+        self.last_judge_was_reason = bool(data.get("is_reason", True))
         return bool(data.get("accept")), str(data.get("reply") or "").strip()
 
     # -- speaking first -------------------------------------------------------
@@ -598,16 +604,25 @@ You decide, as the friend who holds the line.
 ACCEPT when something real and outside his control changed: a school or
 family obligation, being actually sick, an event he forgot, a deadline that
 moved, a place or thing he can't get to -- or a photo that shows it.
+ALSO ACCEPT moving the time to OTHER REAL WORK that is more urgent: an
+unfinished presentation, a competition, a project or assignment with a
+deadline. That is reprioritising, not slacking -- look at what the new plan
+puts in place of the cut work.
 REJECT tiredness, not feeling like it, "I'll do it later", "I need a break",
 vague or one-word answers, or anything that just renames work as rest.
 If you reject, say why in one friendly line and what would count.
 If you accept, keep it short, maybe tell him to make the time up.
-Answer as JSON: {{"accept": true or false, "reply": text to send him}}."""
+If his message is NOT a reason at all -- a question ("pic of what?"),
+confusion, or small talk -- set is_reason to false, accept to false, and in
+reply answer him plainly and say again what you need: a reason for the change.
+Answer as JSON: {{"is_reason": true or false, "accept": true or false,
+"reply": text to send him}}."""
 
 JUDGE_SCHEMA = {
     "type": "OBJECT",
-    "properties": {"accept": {"type": "BOOLEAN"}, "reply": {"type": "STRING"}},
-    "required": ["accept", "reply"],
+    "properties": {"is_reason": {"type": "BOOLEAN"}, "accept": {"type": "BOOLEAN"},
+                   "reply": {"type": "STRING"}},
+    "required": ["is_reason", "accept", "reply"],
 }
 
 CHECKIN = """He's in the middle of this block right now: "{label}".

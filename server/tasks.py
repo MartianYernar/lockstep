@@ -49,13 +49,19 @@ class Tasks:
 
     # -- seeding --------------------------------------------------------------
     def seed(self, items, now: datetime) -> int:
-        """Load the starting list once. Never again: after that the list is his."""
-        if self.db.one("SELECT 1 FROM tasks LIMIT 1"):
-            return 0
+        """Add config tasks that have never existed here.
+
+        A title that was ever in the table -- open, done or dropped -- is left
+        alone: after the first load the list is his, and a task he finished or
+        dropped must not come back on the next restart.
+        """
         n = 0
         for it in items or []:
             if isinstance(it, str):
                 it = {"title": it}
+            if self.db.one("SELECT 1 FROM tasks WHERE lower(title) = lower(?)",
+                           (it["title"].strip(),)):
+                continue
             self.add(it["title"], now, keywords=it.get("keywords"), due=it.get("due"))
             n += 1
         return n

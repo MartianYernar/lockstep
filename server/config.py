@@ -57,7 +57,10 @@ class Config:
             raise SystemExit(
                 f"No config at {path}. Copy config.example.yaml to config.yaml and fill it in."
             )
-        with open(path) as fh:
+        # Explicit, because the file now holds Cyrillic (his shorthand) and a
+        # Windows default codepage can't read it. -sig also eats the BOM the
+        # live copy carries.
+        with open(path, encoding="utf-8-sig") as fh:
             raw = yaml.safe_load(fh)
 
         # Environment overrides let you keep secrets out of the file on a VPS.

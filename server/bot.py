@@ -924,6 +924,14 @@ class LockstepBot:
                    "it's in the log tho." if ok else
                    "can't check that rn — write me the actual reason, a full sentence.")
 
+        if not ok and not image and not getattr(self.coach, "last_judge_was_reason", True):
+            # "pic of what?" is a question, not an excuse. Answer it; don't
+            # spend one of his three tries on it.
+            self.coach.last_judge_was_reason = True
+            await update.message.reply_text(
+                say or "I need the reason you're changing the plan — what happened?")
+            return
+
         reason = (text or "").strip() or "(photo)"
         self.ledger.append("rewrite_reason", {
             "date": day.isoformat(), "kind": pend["kind"], "lost_min": pend["lost"],
@@ -933,6 +941,7 @@ class LockstepBot:
             await update.message.reply_text(say or "ok, fair enough.")
             if pend["kind"] == "replan":
                 await self._accept_replan(update, pend["text"], justified=reason)
+                await self._recheck_after_swap(update, now)
             else:
                 await self._accept_plan(update, day, pend["text"], justified=reason)
             return
@@ -2162,6 +2171,30 @@ class LockstepBot:
         lost = self._work_minutes(old, since) - self._work_minutes(new, since)
         return lost >= int(conf.get("rewrite_min_lost", 10))
 
+    async def _recheck_after_swap(self, update: Update, now: datetime) -> None:
+        """The plan now says he's doing what the rejected photo showed. Look again.
+
+        17 Sep: a presentation screenshot was rejected during a physics block,
+        he swapped the block to the presentation, and the photo that now fits
+        the plan was still sitting there rejected.
+        """
+        r = self.last_reject
+        if not r or (now - r["at"]).total_seconds() > 30 * 60:
+            return
+        # The swap closes the old block's open check as missed and opens one
+        # for the new block, so the photo is re-aimed at whatever is open now.
+        # That new check is still "scheduled" until the next tick asks it; the
+        # photo is its answer, so it is asked here instead.
+        self.db.run("UPDATE checkpoints SET state='asked', asked_at=? WHERE date=?"
+                    " AND state='scheduled' AND due_at <= ?",
+                    (now.isoformat(), now.date().isoformat(), now.isoformat()))
+        cp = self.engine.current_checkpoint(now.date(), now)
+        if cp is None or (cp["id"] == r["cp"] and (cp["label"] or "") == r["label"]):
+            return
+        r.update(cp=cp["id"], label=cp["label"] or r["label"],
+                 category=cp["category"] or r["category"], kind=cp["kind"] or r["kind"])
+        await self._recheck(update, "the plan was just changed to this block", now)
+
     def _live_reject(self, now: datetime) -> dict | None:
         """The rejected photo, if it can still be looked at again."""
         r = self.last_reject
@@ -2232,6 +2265,7 @@ class LockstepBot:
             await self._accept_plan(update, day, text)
         else:
             await self._accept_replan(update, text)
+            await self._recheck_after_swap(update, self.cfg.now())
 
     # ======================================================================
     # the tick
