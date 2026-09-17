@@ -141,14 +141,14 @@ def validate_coverage(blocks: list[Block], window_start: int, window_end: int) -
 
 
 def render(blocks: list[Block]) -> str:
-    lines = []
-    for b in blocks:
-        icon = {
-            "commute": "🚌", "work": "📚", "sport": "🏋️", "clean": "🧹",
-            "skincare": "🧴", "meal": "🍽️", "sleep": "😴", "relax": "🌿",
-        }.get(b.category, "•")
-        lines.append(f"{icon} `{b.hhmm()}`  {b.label}")
-    return "\n".join(lines)
+    """The plan the way a person would write it back to you.
+
+    Every message that carries this is sent as HTML, so the old markdown
+    backticks arrived as literal ` characters, and an unescaped label with a
+    < in it could break the whole message.
+    """
+    import html
+    return "\n".join(f"{b.hhmm()}  {html.escape(b.label)}" for b in blocks)
 
 
 def block_for(blocks: list[Block], minute: int):

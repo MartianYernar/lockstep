@@ -87,7 +87,7 @@ target = bot.target_plan_date(cfg.now())
 db.ensure_day(target); db.set_goals(target, GOALS)
 u = FakeUpdate("/plan\n" + GOOD)
 run(bot.cmd_plan(u, None))
-check("plan accepted", "Locked in" in u.message.last, True)
+check("plan accepted", "locked in" in u.message.last.lower(), True)
 check("blocks stored", len(db.blocks(target)), 3)
 check("plan is locked", eng.has_plan(target), True)
 check("target rolls to tomorrow once today is planned",
@@ -111,7 +111,7 @@ check("prompts for the plan", "one block per line" in u1.message.last, True)
 check("pending state set", bot.pending[USER]["action"], "plan")
 u2 = FakeUpdate(GOOD)
 run(bot.on_text(u2, None))
-check("free text accepted as the plan", "Locked in" in u2.message.last, True)
+check("free text accepted as the plan", "locked in" in u2.message.last.lower(), True)
 check("pending cleared", USER in bot.pending, False)
 
 print("\n=== only your father can stop it — there is no password to type ===")
@@ -246,8 +246,8 @@ goalup(db, bot, cfg)
 u = FakeUpdate("/plan\n16:00-19:00 work: linear algebra pset\n19:00-22:00 work: essay")
 run(bot.cmd_plan(u, None))
 msg = u.message.last
-check("accepted", "Locked in" in msg, True)
-check("says the passed slots are void", "void" in msg, True)
+check("accepted", "locked in" in msg.lower(), True)
+check("says the passed slots are void", "don't count" in msg, True)
 check("does not claim a first photo at 16:00", "at <b>16:0" in msg, False)
 print("      ", msg.split("\n\n")[-1].replace("\n", "\n       "))
 cfg.now = real_now
@@ -450,7 +450,7 @@ check("told to send the plan next", "/plan" in u2.message.last, True)
 
 u3 = FakeUpdate("/plan\n" + GOOD)
 run(bot.cmd_plan(u3, None))
-check("plan now accepted", "Locked in" in u3.message.last, True)
+check("plan now accepted", "locked in" in u3.message.last.lower(), True)
 
 print("\n=== too few and too many are both refused ===")
 cfg, db, led, eng, lk, bot, val = make()
@@ -561,7 +561,7 @@ check("and it names the morning left uncovered", "10:00-16:00" in u.message.last
 
 u2 = FakeUpdate("10:00-22:00 work: essay")
 run(bot._accept_plan(u2, SATB, u2.message.text))
-check("covering 10:00-22:00 is accepted", "Locked in" in u2.message.last, True)
+check("covering 10:00-22:00 is accepted", "locked in" in u2.message.last.lower(), True)
 
 print("\n=== replan closes the obligation it just made impossible ===")
 # Replan truncates the block you were in, so an unanswered checkpoint inside it
@@ -583,7 +583,7 @@ db.run("UPDATE checkpoints SET state='overdue' WHERE id=?", (old["id"],))
 cfg.now = lambda: cfg.at(today, 17 * 60 + 6)
 u = FakeUpdate("17:06-19:00 work: uni research\n19:00-22:00 work: essay")
 run(bot._accept_replan(u, u.message.text))
-check("replan accepted", "rewritten" in u.message.last, True)
+check("replan accepted", "rest of today" in u.message.last, True)
 
 after = db.one("SELECT state FROM checkpoints WHERE id=?", (old["id"],))
 check("the unanswerable one is closed as MISSED", after["state"], "missed")
@@ -605,12 +605,12 @@ bot.cfg.raw["escalation"]["phone_alarm_after_min"] = 5
 run(bot._dispatch(_A("mark_missed", {"label": "work: physics", "count": 1, "checkpoint_id": 1}), now_m))
 msg = bot.app.bot.to(USER)[-1]
 check("names the wait instead of claiming it started", "starts in 5 min" in msg, True)
-check("does not claim escalation has started", "has started" in msg, False)
+check("does not claim the siren is already on", "siren's on now" in msg, False)
 
 bot.cfg.raw["escalation"]["phone_alarm_after_min"] = 0
 run(bot._dispatch(_A("mark_missed", {"label": "work: physics", "count": 1, "checkpoint_id": 1}), now_m))
 msg = bot.app.bot.to(USER)[-1]
-check("with no wait, it truthfully says it has started", "has started" in msg, True)
+check("with no wait, it truthfully says it has started", "siren's on now" in msg, True)
 check("and promises no future minute", "starts in" in msg, False)
 
 print("\n=== the poke: waking a phone that cannot wake itself ===")

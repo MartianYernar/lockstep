@@ -144,7 +144,7 @@ u.message.photo = [types.SimpleNamespace(get_file=_file)]
 eng.tick(N(16, 1))
 run(bot.on_photo(u, None))
 ia = bot.tasks.find("physics ia")
-check("photo accepted", "counted" in u.message.last.lower(), True)
+check("photo accepted", u.message.last.startswith("✅"), True)
 check("the IA was touched", ia["last_touched"], DAY.isoformat())
 check("the essay was not", bot.tasks.find("uni essay")["last_touched"], None)
 
@@ -370,5 +370,76 @@ ctx = bot.coach.context(N(17, 0))
 check("knows the time", "Tuesday 2026-08-25 17:00" in ctx, True)
 check("knows the tasks", "Physics IA" in ctx and "IELTS" in ctx, True)
 check("knows the event", "dentist" in ctx, True)
+
+
+print("\n=== changing the schedule from chat ===")
+cfg, db, led, eng, bot = make(now=N(17, 56))
+db.run("UPDATE checkpoints SET state='satisfied' WHERE date=?", (DAY.isoformat(),))
+model(bot, json.dumps({"reply": "bet", "actions": [{"type": "edit_plan", "day": "today",
+    "plan": "16:00-18:00 work: physics IA\n18:00-18:20 eat\n18:20-19:00 gym\n19:00-22:00 work: uni essay"}]}))
+u = FakeUpdate("add eat 18:00-18:20")
+run(bot.on_text(u, None))
+check("the friend's words go first", u.message.replies[0], "bet")
+check("then the plan is changed", labels(db),
+      ["work: physics IA", "work: physics IA", "eat", "gym", "work: uni essay"])
+check("the minutes before the change stay what they were",
+      [(b["start_min"], b["end_min"]) for b in db.blocks(DAY)][:3],
+      [(960, 1076), (1076, 1080), (1080, 1100)])
+check("and it confirms", "rest of today" in u.message.last, True)
+check("nothing is left pending", bot.coach.last_plan_edits, [])
+
+cfg, db, led, eng, bot = make(now=N(16, 30))
+model(bot, json.dumps({"reply": "ok", "actions": [{"type": "edit_plan", "day": "today",
+    "plan": "16:00-18:00 relax\n18:00-19:00 gym\n19:00-22:00 work: uni essay"}]}))
+u = FakeUpdate("change physics to relax")
+run(bot.on_text(u, None))
+check("cutting work from chat asks why too", "why?" in u.message.last, True)
+check("and changes nothing yet", labels(db)[0], "work: physics IA")
+check("the model's 'done' is not sent before the question",
+      (len(u.message.replies), u.message.replies[0].startswith("wait")), (1, True))
+
+cfg, db, led, eng, bot = make(now=N(16, 30))
+model(bot, json.dumps({"reply": "ok", "actions": [{"type": "edit_plan", "day": "today",
+    "plan": "16:00-17:00 work: physics IA\n17:00-18:00 overlap\n17:30-22:00 work: essay"}]}))
+u = FakeUpdate("do something weird")
+run(bot.on_text(u, None))
+check("a broken plan is refused", labels(db)[0], "work: physics IA")
+check("and he's told", "overlap" in u.message.last, True)
+
+cfg, db, led, eng, bot = make(now=N(21, 0))
+tmr = DAY + timedelta(days=1)
+db.ensure_day(tmr); db.set_goals(tmr, ["a", "b", "c"])
+model(bot, json.dumps({"reply": "done", "actions": [{"type": "edit_plan", "day": "tomorrow",
+    "plan": "16:00-19:00 work: IELTS\n19:00-22:00 work: uni essay"}]}))
+u = FakeUpdate("tomorrow: ielts 16-19, essay 19-22")
+run(bot.on_text(u, None))
+check("tomorrow's plan written from chat", labels(db, tmr), ["work: IELTS", "work: uni essay"])
+check("confirmed as tomorrow", "locked in for tomorrow" in u.message.last, True)
+
+cfg, db, led, eng, bot = make(now=N(22, 30))
+model(bot, json.dumps({"reply": "ok", "actions": [{"type": "edit_plan", "day": "today",
+    "plan": "16:00-22:00 relax"}]}))
+u = FakeUpdate("change today")
+run(bot.on_text(u, None))
+check("today can't be changed once it's over", "already done" in u.message.last, True)
+
+print("\n=== the messages read like a person ===")
+cfg, db, led, eng, bot = make(now=N(16, 0))
+for due, label, kind, cid in ((N(16, 0), "work: physics IA", "blocker_toggle", 1),
+                              (N(18, 0), "gym", "activity", 2),
+                              (N(18, 20), "gym", "activity", 4)):
+    run(bot._dispatch(types.SimpleNamespace(kind="ask", payload={
+        "due_at": due.isoformat(), "label": label, "kind": kind,
+        "checkpoint_id": cid}), due))
+m = bot.app.bot.to(1)
+check("names the task and the time limit", "work: physics IA" in m[0] and "5 min" in m[0], True)
+check("one short message, no stacked paragraphs", all("\n\n" not in x for x in m), True)
+check("the start of a block reads as a start",
+      any(w in m[1] for w in ("starts", "time", "now")), True)
+check("a later one reads as a check-in",
+      any(w in m[2] for w in ("still", "check", "going")), True)
+check("the plan has no stray backticks", "`" in planner.render(planner.parse(PLAN)), False)
+check("a label with < can't break the HTML",
+      "&lt;" in planner.render(planner.parse("16:00-22:00 work: a<b")), True)
 
 sys.exit(report("FRIEND TESTS"))

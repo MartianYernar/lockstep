@@ -220,6 +220,11 @@ class LockstepBot:
             self._render_steps(day, label), parse_mode=ParseMode.HTML,
             reply_markup=self._step_buttons(day, int(bi), label))
 
+    @staticmethod
+    def _nice(seed: int) -> str:
+        return ["✅ got it.", "✅ nice.", "✅ good stuff.", "✅ that counts 👊",
+                "✅ bet.", "✅ ok ok, counted."][int(seed or 0) % 6]
+
     def _goal_buttons(self, day: date) -> InlineKeyboardMarkup | None:
         left = [g for g in self.db.goals(day) if not g["done"]]
         if not left:
@@ -705,27 +710,31 @@ class LockstepBot:
                             "live": built["live"], "voided": built["voided"]})
         self.pending.pop(update.effective_chat.id, None)
 
-        tail = f"{built['live']} checkpoint{'s' if built['live'] != 1 else ''} ahead of you."
-        if built["voided"]:
-            tail += (f"\n({built['voided']} fell before you sent this and are void — "
-                     "you can't photograph the past.)")
+        tail = ""
         if built["first"]:
-            tail += f"\nFirst photo at <b>{datetime.fromisoformat(built['first']):%H:%M}</b>."
+            tail = (f"first pic at {datetime.fromisoformat(built['first']):%H:%M}, "
+                    f"{built['live']} check{'s' if built['live'] != 1 else ''} total.")
+        if built["voided"]:
+            tail += (f" ({built['voided']} were already in the past so those "
+                     "don't count)")
+        if built["first"]:
+            pass
         elif target > now.date():
-            tail += f"\nNothing to check yet — this plan starts on {target:%A}."
+            tail = f"{built['live']} checks on {target:%A}. see you then 👊"
         else:
             # A plan for today whose blocks have all already started produces
             # nothing checkable, and the old wording ("this plan starts
             # tomorrow") said the opposite of the truth: it is today's plan and
             # tomorrow still needs its own. Accepting it silently let him think
             # the evening was covered when nothing at all would be asked.
-            tail += ("\n⚠️ <b>Every block already started, so nothing can be checked "
-                     "today.</b>\nTo cover the rest of today, send /replan with blocks "
-                     "from now to the end of the day.")
+            tail += ("\nbut every block already started, so nothing can be checked "
+                     "today. /replan with blocks from now if you want today covered.")
 
         tail += self._plan_task_note(target, blocks)
+        when = "today" if target == now.date() else (
+            "tomorrow" if target == now.date() + timedelta(days=1) else f"{target:%A %d %b}")
         await update.message.reply_text(
-            f"✅ Locked in for <b>{target:%A %d %B}</b> 🤝\n\n{planner.render(blocks)}\n\n{tail}",
+            f"locked in for {when} 🤝\n\n{planner.render(blocks)}\n\n{tail.strip()}",
             parse_mode=ParseMode.HTML)
 
     async def cmd_replan(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -815,8 +824,8 @@ class LockstepBot:
                 "block you just replanned away counts as missed — that block is over.)"
                 if closed else "")
         await update.message.reply_text(
-            f"✅ Rest of today rewritten.\n\n{planner.render(blocks)}\n\n"
-            f"{built['live']} checkpoints ahead. Day still ends at "
+            f"done, here's the rest of today:\n\n{planner.render(blocks)}\n\n"
+            f"{built['live']} check{'s' if built['live'] != 1 else ''} left, still ending at "
             f"{end//60:02d}:{end%60:02d}.{tail}",
             parse_mode=ParseMode.HTML)
         why = (f"\nReason: <i>{html.escape(justified)}</i>"
@@ -1797,13 +1806,13 @@ class LockstepBot:
         sc = self.engine.score(today, now)
         note = ""
         if res["swept"]:
-            note = f"\n({res['swept']} earlier checkpoint{'s' if res['swept'] > 1 else ''} " \
-                   "stay missed — one photo can't cover a past moment. Debt is cleared.)"
+            note = (f"\n(the {res['swept']} you missed before still count as missed, "
+                    "but you're caught up now)")
         if verdict.unverified:
             note += "\n⚠️ The vision model was unreachable; this one is flagged in the log."
             await self.send_guardian("⚠️ Vision model unreachable — a photo was accepted unchecked.")
         await update.message.reply_text(
-            f"✅ nice, counted. {sc['hit']}/{sc['due']} today.{note}", parse_mode=ParseMode.HTML)
+            f"{self._nice(cp['id'])} {sc['hit']}/{sc['due']} today{note}", parse_mode=ParseMode.HTML)
 
     async def _handle_bed_photo(self, update: Update, night: date, bed,
                                 blob: bytes, mime: str, now: datetime) -> None:
@@ -1984,10 +1993,86 @@ class LockstepBot:
             await update.message.reply_text(
                 "can't think straight rn, message me again in a bit")
             return
-        if not out:
+        edits, self.coach.last_plan_edits = self.coach.last_plan_edits, []
+        prepared = self._prepare_chat_plan(edits[0], now) if edits else None
+        # If the change is about to be held for a reason, the model's reply
+        # ("got you, switched") would be a lie told one message before the
+        # question. Say only the question.
+        if out and not self._chat_plan_held(prepared, now):
+            await update.message.reply_text(out[:3900])
+        elif not out and prepared is None:
             await update.message.reply_text("sorry, blanked. say that again?")
             return
-        await update.message.reply_text(out[:3900])
+        if prepared is not None:
+            await self._apply_chat_plan(update, prepared)
+
+    def _prepare_chat_plan(self, edit: dict, now: datetime):
+        """Turn a chat edit into (path, day, plan text), or a message to send.
+
+        path is "replan" (today, window open) or "plan" (anything else).
+        """
+        text = (edit.get("plan") or "").strip()
+        today = now.date()
+        target = today + timedelta(days=1) if str(edit.get("day", "")).lower().startswith("tom") \
+            else today
+        if target != today or not self.engine.has_plan(today):
+            return ("plan", target, text)
+        minute = now.hour * 60 + now.minute
+        start, end = self.engine.window(today)
+        if minute >= end:
+            return "today's already done bro. want me to change tomorrow instead?"
+        if minute < start:
+            return ("plan", today, text)
+        try:
+            blocks = [b for b in planner.parse(text) if b.end_min > minute]
+        except planner.PlanError as exc:
+            return f"couldn't make that work: {html.escape(str(exc))}"
+        if blocks and blocks[0].start_min > minute:
+            # "add eat at 18:00" at 17:56: the minutes before it stay whatever
+            # he is doing now.
+            here = next((b for b in self.db.blocks(today)
+                         if b["start_min"] <= minute < b["end_min"]), None)
+            fill = here["label"] if here else "relax"
+            text = (f"{minute//60:02d}:{minute%60:02d}-"
+                    f"{blocks[0].start_min//60:02d}:{blocks[0].start_min%60:02d} {fill}\n"
+                    + "\n".join(f"{b.hhmm()} {b.label}" for b in blocks))
+        return ("replan", today, text)
+
+    def _chat_plan_held(self, prepared, now: datetime) -> bool:
+        """Would this change stop and ask why? Mirrors _ask_why's arithmetic."""
+        if not isinstance(prepared, tuple):
+            return False
+        conf = self.cfg.raw.get("friend", {}) or {}
+        if not conf.get("guard_rewrites", True):
+            return False
+        path, day, text = prepared
+        row = self.db.day(day)
+        if not (row and row["plan_locked"]):
+            return False
+        try:
+            new = [(b.start_min, b.end_min, b.label) for b in planner.parse(text)]
+        except planner.PlanError:
+            return False
+        old = [(b["start_min"], b["end_min"], b["label"]) for b in self.db.blocks(day)]
+        since = (now.hour * 60 + now.minute) if day == now.date() else 0
+        lost = self._work_minutes(old, since) - self._work_minutes(new, since)
+        return lost >= int(conf.get("rewrite_min_lost", 10))
+
+    async def _apply_chat_plan(self, update: Update, prepared) -> None:
+        """A schedule change he asked for in chat, through the normal door.
+
+        Nothing here is a shortcut: today's changes go through the replan path
+        and everything else through the plan path, so the goals gate, the
+        coverage check and the "why are you cutting work?" question all apply.
+        """
+        if isinstance(prepared, str):
+            await update.message.reply_text(prepared, parse_mode=ParseMode.HTML)
+            return
+        path, day, text = prepared
+        if path == "plan":
+            await self._accept_plan(update, day, text)
+        else:
+            await self._accept_replan(update, text)
 
     # ======================================================================
     # the tick
@@ -2165,29 +2250,47 @@ class LockstepBot:
             kind = p.get("kind", "activity")
             blocker = self.cfg.vision.get("blocker_name", "Cold Turkey")
             label = html.escape(p["label"])
-            asks = {
-                "blocker_toggle": (
-                    f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"screenshot {blocker} <b>running</b>, with the taskbar clock in it."),
-                "blocker_allow": (
-                    f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"<b>Shot 2 of 2.</b> Open the block's details and screenshot "
-                    f"what it covers — the allowed list, or the exceptions if it "
-                    f"blocks everything else."),
-                "blocker_block": (
-                    f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"Screenshot what this block covers."),
-                "activity": (
-                    f"📸 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"send a pic of you doing it, with the time showing."),
-                "bed": (
-                    f"🛏 <b>{due:%H:%M}</b> — <b>bedtime.</b>\n\n"
-                    f"send a pic of your bed, opened. siren runs till you do."),
-            }
-            body = asks.get(kind, asks["activity"])
-            if kind == "activity":
-                body += "\n\n(no face, no logins, nothing that shows where you live)"
-            body += f"\n\nyou got {self.cfg.grace_min} min."
+            grace = self.cfg.grace_min
+            cid = int(p.get("checkpoint_id") or 0)
+            # Is this the top of the block, or one of the checks inside it?
+            minute = due.hour * 60 + due.minute
+            starting = any(bk["start_min"] == minute and bk["label"] == p["label"]
+                           for bk in self.db.blocks(due.date()))
+
+            def pick(options):
+                # Same checkpoint, same words -- but not the same words every time.
+                return options[cid % len(options)]
+
+            if kind == "bed":
+                body = pick([
+                    "bedtime bro 🛏 send me a pic of your bed, opened. siren stops when it lands",
+                    "ok that's the day. bed pic (opened) and you're done 😴",
+                    "time to sleep man. pic of your bed made up for the night pls",
+                ])
+            elif kind.startswith("blocker"):
+                body = pick([
+                    f"{label} time 🔒 screenshot {blocker} running, taskbar clock in it. {grace} min",
+                    f"yo, {label} starts now. show me {blocker} on (clock visible) — {grace} min",
+                    f"{label} 🔒 {blocker} screenshot with the clock pls, you got {grace} min",
+                ])
+                if kind == "blocker_allow":
+                    body += "\nand the list of what the block allows"
+            elif starting:
+                body = pick([
+                    f"{label} time 👊 send me a pic of you on it, clock in the shot. {grace} min",
+                    f"yo it's {due:%H:%M}, {label} now. pic with the time showing, you got {grace} min",
+                    f"ok {label}. snap me a pic of you doing it (time visible) — {grace} min",
+                    f"{label} starts now bro. pic of it with the clock, {grace} min",
+                ])
+            else:
+                body = pick([
+                    f"still on {label}? quick pic with the clock 📸 {grace} min",
+                    f"checking in — {label} going? send a pic, {grace} min",
+                    f"pic check 👀 {label}, time in the shot. {grace} min",
+                    f"you still on {label}? show me, {grace} min",
+                ])
+            if kind == "activity" and cid % 3 == 0:
+                body += "\n(no face or logins in it)"
             await self.send_user(body)
             self.ledger.append("checkpoint_asked",
                                {"checkpoint": p["checkpoint_id"], "kind": kind})
@@ -2196,17 +2299,17 @@ class LockstepBot:
             labels = p.get("labels") or [p.get("label", "your planned task")]
             what = ", ".join(html.escape(x) for x in labels)
             n = p.get("count", 1)
-            prefix = f"⏰ time's up ({n} checkpoints)" if n > 1 else "⏰ time's up"
+            prefix = (f"yo you missed {n} pics" if n > 1 else "yo where's the pic")
             # This used to say "Escalation has started" the moment the grace ran
             # out, while phone_alarm_after_min held the siren back for several
             # more minutes. So the message announced a siren that was not coming
             # yet, and the silence read as a broken system rather than a
             # deliberate wait. Say what is actually true, and when.
             wait = int(self.cfg.esc.get("phone_alarm_after_min", 0))
-            when = ("siren has started — send the pic and it stops."
+            when = ("siren's on now, send it and it stops 🔊"
                     if wait <= 0 else
-                    f"siren starts in {wait} min unless you send it first.")
-            await self.send_user(f"{prefix} for <b>{what}</b>. {when}")
+                    f"siren starts in {wait} min if it doesn't come")
+            await self.send_user(f"{prefix} for {what}? {when}")
             self.ledger.append("checkpoint_overdue",
                                {"checkpoint": p["checkpoint_id"], "count": n})
 

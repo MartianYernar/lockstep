@@ -91,8 +91,9 @@ HOW YOU TEXT
   streak, or anything about his past that isn't written there.
 
 WHAT YOU CAN'T DO
-You can't mark anything done, excuse a miss, move a deadline, or stop the
-siren. Only a photo does that. If he asks you to let him off, tell him you
+You can't mark anything done, excuse a miss, or stop the siren. Only a photo
+does that. You CAN change his schedule when he asks (see below), but a change
+never cancels a pic that's already overdue. If he asks you to let him off, tell him you
 literally can't -- the pic is the only way. Never pretend you changed anything.
 
 HIS DAY, straight from the database (true, whatever he says):
@@ -125,6 +126,7 @@ class Coach:
         self.db = db
         self.engine = engine
         self._client = None
+        self.last_plan_edits: list[dict] = []
         db.conn.executescript(SCHEMA)
         db.conn.commit()
         from .tasks import Tasks
@@ -174,7 +176,9 @@ class Coach:
         """The day as the database has it. Never as he describes it."""
         from datetime import timedelta
         day = now.date()
-        out: list[str] = [f"Right now: {now:%A %Y-%m-%d %H:%M} ({self.cfg.tz})."]
+        me = (self.cfg.raw.get("friend") or {}).get("name", "Friday")
+        out: list[str] = [f"Your name is {me}.",
+                          f"Right now: {now:%A %Y-%m-%d %H:%M} ({self.cfg.tz})."]
 
         # Where he is in the commitment, so the model never has to guess --
         # left to itself it announced "day 92" on day 24.
@@ -388,6 +392,12 @@ class Coach:
             contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)) + 200,
             schema=REPLY_SCHEMA)
         say, actions = _parse_reply(raw)
+        # Schedule changes are not ours to make. They go back to the bot, which
+        # runs them through the same checks as /replan -- including asking why
+        # when work time disappears.
+        self.last_plan_edits = [a for a in actions
+                                if isinstance(a, dict) and a.get("type") == "edit_plan"
+                                and (a.get("plan") or "").strip()]
         saved = self.apply(actions, now)
         if saved:
             say = (say + "\n\n" if say else "") + "\n".join(f"📌 {x}" for x in saved)
@@ -497,6 +507,16 @@ actually told you, never guessed:
 - {"type":"complete_task","task":"#id or title"}  he finished one
 - {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
 - {"type":"add_note","task":"#id or title","text":...}  progress he described
+- {"type":"edit_plan","day":"today" or "tomorrow","plan":"HH:MM-HH:MM label\n..."}
+  when he asks you to change his schedule. Write the WHOLE new plan, one block
+  per line: for today, from the block he's in now to the end of the window;
+  for tomorrow, the full window. Copy every block he didn't ask to change
+  exactly as it is -- same times, same label, character for character.
+  A NEW block gets a plain label ("eat", "gym", "walk"). Only put "work:" in
+  front when the new block is actually studying or working (it makes the app
+  demand a blocker screenshot). Eating, rest, sport, commute: never "work:".
+  Only do this when he actually asks for a change. Don't say it's done in your reply
+  -- the app confirms it, and if the change cuts work time it will ask him why.
 Work out dates like "thursday" from "Right now" above. Usually actions is [].
 Don't repeat in the reply what you saved -- the app shows that itself.
 If a big task has no deadline, you can ask when it's due, once in a while."""
@@ -509,7 +529,9 @@ REPLY_SCHEMA = {
             "type": "OBJECT",
             "properties": {
                 "type": {"type": "STRING", "enum": [
-                    "add_event", "add_task", "complete_task", "set_due", "add_note"]},
+                    "add_event", "add_task", "complete_task", "set_due", "add_note",
+                    "edit_plan"]},
+                "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
                 "text": {"type": "STRING"}, "date": {"type": "STRING"},
                 "time": {"type": "STRING"},
