@@ -127,6 +127,8 @@ class Coach:
         self._client = None
         db.conn.executescript(SCHEMA)
         db.conn.commit()
+        from .tasks import Tasks
+        self.tasks = Tasks(db)
 
     # -- config ---------------------------------------------------------------
     @property
@@ -172,7 +174,7 @@ class Coach:
         """The day as the database has it. Never as he describes it."""
         from datetime import timedelta
         day = now.date()
-        out: list[str] = []
+        out: list[str] = [f"Right now: {now:%A %Y-%m-%d %H:%M} ({self.cfg.tz})."]
 
         # Where he is in the commitment, so the model never has to guess --
         # left to itself it announced "day 92" on day 24.
@@ -227,6 +229,21 @@ class Coach:
             out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind. "
                        f"The siren is going. He owes a photo. **")
 
+        big = self.tasks.describe(day)
+        out.append("His big tasks (the long-running ones):")
+        out.append(big or "  none saved.")
+
+        events = self.db.q(
+            "SELECT at_ts, text FROM reminders WHERE at_ts >= ? AND at_ts < ?"
+            " ORDER BY at_ts LIMIT 15",
+            (now.isoformat(), (now + timedelta(days=14)).isoformat()))
+        if events:
+            out.append("Events coming up (already saved, he gets reminded):")
+            for e in events:
+                out.append(f"  {datetime.fromisoformat(e['at_ts']):%a %d %b %H:%M} — {e['text']}")
+        else:
+            out.append("Events coming up: none saved.")
+
         steps = self.db.q(
             "SELECT label, idx, text, done FROM block_steps WHERE date = ?"
             " ORDER BY label, idx", (day.isoformat(),))
@@ -239,17 +256,21 @@ class Coach:
 
     # -- the call itself ------------------------------------------------------
     async def _ask(self, system: str, contents: list, now: datetime,
-                   max_tokens: int = 400) -> str:
+                   max_tokens: int = 400, schema: dict | None = None) -> str:
         from google.genai import types
         if self._client is None:
             from google import genai
             self._client = genai.Client(api_key=self.cfg.raw["gemini"]["api_key"])
 
+        extra = {}
+        if schema is not None:
+            extra = {"response_mime_type": "application/json", "response_schema": schema}
         cfg = types.GenerateContentConfig(
             system_instruction=system,
             temperature=float(self.conf.get("temperature", 0.7)),
             max_output_tokens=max_tokens,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
+            **extra,
         )
         last: Exception | None = None
         for model in self._models():
@@ -346,6 +367,12 @@ class Coach:
                     (day.isoformat(), now.isoformat(), role, text[:2000]))
 
     async def reply(self, text: str, now: datetime) -> str:
+        """Answer, and save whatever he told us that is worth remembering.
+
+        The model returns its reply and a list of actions. The only things an
+        action can write are his task list and his events -- notes he asked us
+        to keep. Nothing here reaches a checkpoint, a plan, or the siren.
+        """
         from google.genai import types
         day = now.date()
         contents = []
@@ -356,9 +383,198 @@ class Coach:
         contents.append(types.Content(
             role="user", parts=[types.Part.from_text(text=text)]))
 
-        out = await self._ask(
-            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)))
+        raw = await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)) + ACTIONS,
+            contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)) + 200,
+            schema=REPLY_SCHEMA)
+        say, actions = _parse_reply(raw)
+        saved = self.apply(actions, now)
+        if saved:
+            say = (say + "\n\n" if say else "") + "\n".join(f"📌 {x}" for x in saved)
         self.remember(day, now, "user", text)
-        self.remember(day, now, "coach", out)
-        return out
+        self.remember(day, now, "coach", say)
+        return say
+
+    def apply(self, actions: list, now: datetime) -> list[str]:
+        """Carry out what the model asked for. Returns what was actually saved."""
+        done: list[str] = []
+        for a in actions or []:
+            if not isinstance(a, dict):
+                continue
+            kind = (a.get("type") or "").strip()
+            try:
+                if kind == "add_task":
+                    title = (a.get("title") or "").strip()
+                    if not title or self.tasks.find(title):
+                        continue
+                    due = _date(a.get("date"))
+                    tid = self.tasks.add(title, now, due=due)
+                    done.append(f"new task #{tid}: {title}"
+                                + (f" (due {due:%d %b})" if due else ""))
+                elif kind in ("complete_task", "set_due", "add_note"):
+                    t = self.tasks.find((a.get("task") or "").lstrip("#"))
+                    if t is None:
+                        continue
+                    if kind == "complete_task":
+                        if self.tasks.close(t["id"], now):
+                            done.append(f"done: {t['title']} ✅")
+                    elif kind == "set_due":
+                        due = _date(a.get("date"))
+                        if due and due >= now.date() and self.tasks.set_due(t["id"], due):
+                            done.append(f"{t['title']} due {due:%a %d %b}")
+                    else:
+                        note = (a.get("text") or "").strip()
+                        if note and self.tasks.note(t["id"], note):
+                            done.append(f"noted on {t['title']}")
+                elif kind == "add_event":
+                    what = (a.get("text") or a.get("title") or "").strip()
+                    d, hm = _date(a.get("date")), (a.get("time") or "").strip()
+                    if not (what and d and ":" in hm):
+                        continue
+                    hh, mi = (int(x) for x in hm.split(":")[:2])
+                    when = datetime.combine(d, datetime.min.time(),
+                                            tzinfo=now.tzinfo).replace(hour=hh, minute=mi)
+                    if when <= now:
+                        continue
+                    if self.db.one("SELECT 1 FROM reminders WHERE at_ts = ? AND text = ?",
+                                   (when.isoformat(), what)):
+                        continue
+                    self.db.run("INSERT INTO reminders (at_ts, text, created_at)"
+                                " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
+                    done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
+            except (ValueError, TypeError) as exc:
+                log.warning("coach action %s skipped: %s", kind, exc)
+        return done
+
+    # -- holding the line on a replan ----------------------------------------
+    async def judge_replan(self, reason: str, image: bytes | None, mime: str,
+                           lost_min: int, old: str, new: str,
+                           now: datetime) -> tuple[bool, str]:
+        """Is this a real reason to take work time out of today?
+
+        Returns (accepted, what to tell him). Raises if the model can't be
+        reached; the caller decides what that means.
+        """
+        import json
+        from google.genai import types
+        parts = [types.Part.from_text(text=JUDGE.format(
+            lost=lost_min, old=old, new=new,
+            reason=reason or "(no text, only a photo)"))]
+        if image:
+            parts.append(types.Part.from_bytes(data=image, mime_type=mime))
+        raw = await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [types.Content(role="user", parts=parts)], now,
+            max_tokens=300, schema=JUDGE_SCHEMA)
+        data = json.loads(raw)
+        return bool(data.get("accept")), str(data.get("reply") or "").strip()
+
+    # -- speaking first -------------------------------------------------------
+    async def checkin(self, block, now: datetime) -> str:
+        """A friend texting halfway through a block: how's it going."""
+        return await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [CHECKIN.format(label=block["label"])], now, max_tokens=120)
+
+    async def brief(self, now: datetime) -> str:
+        """Before the window opens: what's on his plate, in a couple of lines."""
+        return await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [BRIEF], now, max_tokens=220)
+
+
+# --------------------------------------------------------------------------
+ACTIONS = """
+
+SAVING THINGS
+You remember his big tasks and his events (listed above). Reply as JSON:
+{"reply": what you text him, "actions": [...]}. Actions -- only for things he
+actually told you, never guessed:
+- {"type":"add_event","text":...,"date":"YYYY-MM-DD","time":"HH:MM"}  a meeting,
+  exam, appointment, anything at a set time. If the date or time is unclear,
+  don't save it -- ask him.
+- {"type":"add_task","title":...,"date":"YYYY-MM-DD" or ""}  a new big task
+- {"type":"complete_task","task":"#id or title"}  he finished one
+- {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
+- {"type":"add_note","task":"#id or title","text":...}  progress he described
+Work out dates like "thursday" from "Right now" above. Usually actions is [].
+Don't repeat in the reply what you saved -- the app shows that itself.
+If a big task has no deadline, you can ask when it's due, once in a while."""
+
+REPLY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "reply": {"type": "STRING"},
+        "actions": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "type": {"type": "STRING", "enum": [
+                    "add_event", "add_task", "complete_task", "set_due", "add_note"]},
+                "task": {"type": "STRING"}, "title": {"type": "STRING"},
+                "text": {"type": "STRING"}, "date": {"type": "STRING"},
+                "time": {"type": "STRING"},
+            },
+            "required": ["type"],
+        }},
+    },
+    "required": ["reply", "actions"],
+}
+
+JUDGE = """He's trying to replan the rest of today, and it cuts {lost} minutes of
+real work.
+
+Current plan (from now):
+{old}
+
+What he wants instead:
+{new}
+
+His reason: {reason}
+
+You decide, as the friend who holds the line.
+ACCEPT when something real and outside his control changed: a school or
+family obligation, being actually sick, an event he forgot, a deadline that
+moved, a place or thing he can't get to -- or a photo that shows it.
+REJECT tiredness, not feeling like it, "I'll do it later", "I need a break",
+vague or one-word answers, or anything that just renames work as rest.
+If you reject, say why in one friendly line and what would count.
+If you accept, keep it short, maybe tell him to make the time up.
+Answer as JSON: {{"accept": true or false, "reply": text to send him}}."""
+
+JUDGE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"accept": {"type": "BOOLEAN"}, "reply": {"type": "STRING"}},
+    "required": ["accept", "reply"],
+}
+
+CHECKIN = """He's in the middle of this block right now: "{label}".
+Text him first, like a friend checking in -- one short message, a question
+about how it's going or what he's on. No lists. Don't mention photos unless
+something is OVERDUE above."""
+
+BRIEF = """His work window opens soon. Text him first, 2-4 short lines max:
+what's actually on his plate -- any event today, a big task due soon, one he
+hasn't touched in days. Pick what matters most, don't list everything. If
+nothing big is pressing, just a short push to get started. Plain text."""
+
+
+def _date(v):
+    if not v:
+        return None
+    try:
+        return date.fromisoformat(str(v).strip()[:10])
+    except ValueError:
+        return None
+
+
+def _parse_reply(raw: str) -> tuple[str, list]:
+    """The JSON the model was asked for -- or, if it ignored that, its text."""
+    import json
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return (raw or "").strip(), []
+    if not isinstance(data, dict):
+        return str(data), []
+    acts = data.get("actions") or []
+    return str(data.get("reply") or "").strip(), acts if isinstance(acts, list) else []

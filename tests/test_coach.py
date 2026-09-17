@@ -52,7 +52,7 @@ def stub(coach, answer="", fail=False):
     """Replace the model. Counts calls so budgeting can be checked."""
     calls = {"n": 0}
 
-    async def fake(system, contents, now, max_tokens=400):
+    async def fake(system, contents, now, max_tokens=400, **_kw):
         calls["n"] += 1
         if fail:
             raise RuntimeError("model down")

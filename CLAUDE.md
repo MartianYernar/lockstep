@@ -53,6 +53,15 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   only thing that enforces anything, so it runs on the TAIL of the model chain
   and stops at `coach.max_calls_per_day`. If you touch this, keep both of those:
   no write access to the record, and the camera eats first.
+  It CAN write two things, both his own notes: the big-task list
+  (`server/tasks.py`) and events (the `reminders` table). `Coach.apply` is the
+  only door, and `tests/test_friend.py` pins that nothing else moves.
+- **Rewrites that cut work need a reason.** `/replan`, or re-sending an already
+  locked plan, that removes `friend.rewrite_min_lost` minutes of important work
+  (a `work:` block or one matching a big task) is held until he explains it in
+  text or a photo and the friend accepts. Work-for-work swaps pass freely. If
+  the model is unreachable, a full-sentence reason is taken on trust and logged.
+  Every attempt, accepted or not, goes in the ledger as `rewrite_reason`.
 - **No passwords anywhere.** The guardian is a Telegram chat id. Passwords get
   forgotten; this project already lost one that way.
 - **Stopping is a delay, not a wall.** `/stopbot` schedules it 24 hours out.
