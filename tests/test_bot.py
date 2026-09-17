@@ -126,7 +126,7 @@ check("awaiting the reason", bot.pending[USER]["action"], "disable_reason")
 
 u2 = FakeUpdate("too short")
 run(bot.on_text(u2, None))
-check("a throwaway reason is refused", "Longer" in u2.message.last, True)
+check("a throwaway reason is refused", "write more" in u2.message.last.lower(), True)
 
 u3 = FakeUpdate("i have a fever and cannot do any of this today")
 run(bot.on_text(u3, None))
@@ -146,7 +146,7 @@ check("still on", lk.enabled, True)
 
 ue = FakeUpdate("/enable", chat_id=USER)
 run(bot.cmd_enable(ue, None))
-check("/enable is not yours either", "Not yours to switch" in ue.message.last, True)
+check("/enable is not yours either", "not your call" in ue.message.last.lower(), True)
 
 print("\n=== his stop is a delay, not a switch ===")
 now0 = cfg.now()
@@ -156,7 +156,7 @@ check("system is STILL ON", lk.enabled, True)
 check("a stop is scheduled", lk.pending_stop() is not None, True)
 check("24 hours out", int((lk.pending_stop() - now0).total_seconds() // 3600), 24)
 check("he is told why the delay exists", "urge is a state" in ug.message.last, True)
-check("you are told when", "Not now" in bot.app.bot.to(USER)[-1], True)
+check("you are told when", "not now" in bot.app.bot.to(USER)[-1].lower(), True)
 
 print("\n=== the urge passes, and you can say so yourself ===")
 un = FakeUpdate("/nevermind")
@@ -428,7 +428,7 @@ evening = datetime.combine(today, datetime.min.time(), tzinfo=cfg.tz).replace(ho
 cfg.now = lambda: evening
 u = FakeUpdate("/more 30")
 run(bot.cmd_more(u, None))
-check("refused outside the window", "isn't open" in u.message.last, True)
+check("refused outside the window", "not in the window" in u.message.last.lower(), True)
 
 
 
@@ -438,7 +438,7 @@ cfg, db, led, eng, lk, bot, val = make()
 target = bot.target_plan_date(cfg.now())
 u = FakeUpdate("/plan\n" + GOOD)
 run(bot.cmd_plan(u, None))
-check("plan refused with no goals", "Goals first" in u.message.last, True)
+check("plan refused with no goals", "goals first" in u.message.last.lower(), True)
 check("nothing stored", len(db.blocks(target)), 0)
 check("now waiting for goals", bot.pending[USER]["action"], "goals")
 
@@ -476,7 +476,7 @@ check("shows the tally", "1/3" in u.message.last, True)
 
 u = FakeUpdate("/done 9")
 run(bot.cmd_done(u, None))
-check("out-of-range is refused", "No goal with that number" in u.message.last, True)
+check("out-of-range is refused", "goal with that number" in u.message.last.lower(), True)
 
 rep = bot._report_text(today)
 check("report names the goals", "first draft of the essay" in rep, True)
@@ -500,15 +500,15 @@ today = cfg.today()
 
 u = FakeUpdate("/latenight")
 run(bot.cmd_latenight(u, None))
-check("a bare command is refused", "What for?" in u.message.last, True)
+check("a bare command is refused", "what for?" in u.message.last.lower(), True)
 
 u = FakeUpdate("/latenight busy")
 run(bot.cmd_latenight(u, None))
-check("a two-word reason is refused too", "What for?" in u.message.last, True)
+check("a two-word reason is refused too", "what for?" in u.message.last.lower(), True)
 
 u = FakeUpdate("/latenight hackathon submission is due at midnight")
 run(bot.cmd_latenight(u, None))
-check("a real reason asks for the photo", "the photo" in u.message.last, True)
+check("a real reason asks for the photo", "send the pic" in u.message.last.lower(), True)
 check("and waits for it", bot.pending[USER]["action"], "latenight_photo")
 _row = db.day(today)
 check("nothing granted yet — a reason alone buys nothing",
@@ -706,7 +706,7 @@ print("\n=== /done on a day with no goals doesn't offer an empty keyboard ===")
 cfg, db, led, eng, lk, bot, val = make()
 u = FakeUpdate("/done")
 run(bot.cmd_done(u, None))
-check("says there is nothing to tick", "No goals set" in u.message.last, True)
+check("says there is nothing to tick", "no goals for today" in u.message.last.lower(), True)
 check("no keyboard built", bot._goal_buttons(cfg.today()), None)
 
 sys.exit(report("BOT TESTS"))

@@ -23,14 +23,14 @@ log = logging.getLogger("bot")
 PHOTO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "photos")
 
 PLAN_HELP = (
-    "Send the plan as one block per line:\n\n"
+    "send the plan, one block per line:\n\n"
     "<code>16:00-16:40 commute to MNU library\n"
     "16:40-19:00 work: linear algebra pset ch3\n"
     "19:00-19:30 gym\n"
     "19:30-20:00 dinner\n"
     "20:00-21:30 work: essay draft\n"
     "21:30-22:00 clean room</code>\n\n"
-    "Cover every minute of the window. <code>relax</code> counts."
+    "cover the whole window. <code>relax</code> counts as a block."
 )
 
 
@@ -229,8 +229,7 @@ class LockstepBot:
                 reply_markup=self._keyboard(update))
             return
         await update.message.reply_text(
-            "Buttons are under the text box. You shouldn't have to type "
-            "a command to say you did the work.",
+            "yo. buttons are under the text box now, no need to type commands.",
             reply_markup=self._keyboard(update))
         await self.cmd_status(update, _ctx)
 
@@ -250,7 +249,7 @@ class LockstepBot:
                 reply_markup=self._keyboard(update))
             return
         await update.message.reply_text(
-            "In the window, just send the photo. No command needed.\n\n"
+            "during the window just send me the photo, that's it.\n\n"
             "<b>The day</b>\n"
             "/goals — the 3-5 things tomorrow is for\n"
             "/plan — tomorrow's timetable · /done 2 — tick a goal off\n"
@@ -263,7 +262,7 @@ class LockstepBot:
             "<b>Everything else</b>\n"
             "/remind 3 sep 14:40 doctor · /reminders · /forget N\n"
             "/why · /testsiren · /mute 3 · /logs · /restart · /disable\n\n"
-            "Or just type — anything that isn't a command comes to me.",
+            "or just text me like normal, I'm here.",
             parse_mode=ParseMode.HTML,
             reply_markup=self._keyboard(update))
 
@@ -361,13 +360,13 @@ class LockstepBot:
             if existing:
                 await update.message.reply_text(
                     f"<b>Goals for {now.date():%A %d %B}</b>\n\n{existing}\n\n"
-                    "<code>/done 2</code> to tick one off.",
+                    "<code>/done 2</code> when one's done.",
                     parse_mode=ParseMode.HTML)
                 return
             self.pending[update.effective_chat.id] = {"action": "goals", "date": target}
             await update.message.reply_text(
-                f"What are the <b>{lo}-{hi} things</b> {target:%A %d %B} is for?\n\n"
-                "Outcomes, not a timetable. One per line:\n\n"
+                f"what are the <b>{lo}-{hi} things</b> that matter for {target:%A}?\n\n"
+                "outcomes, not times. one per line, like:\n\n"
                 "<code>finish linear algebra pset ch3\n"
                 "first draft of the essay, any quality\n"
                 "gym, legs</code>",
@@ -381,13 +380,12 @@ class LockstepBot:
         items = [i for i in items if i]
         if len(items) < lo:
             await update.message.reply_text(
-                f"That's {len(items)}. Give me at least <b>{lo}</b>.",
+                f"only {len(items)}? give me at least <b>{lo}</b>.",
                 parse_mode=ParseMode.HTML)
             return
         if len(items) > hi:
             await update.message.reply_text(
-                f"That's {len(items)}. Cut it to <b>{hi}</b>.\n\n"
-                "More than that is a wish list, not priorities.",
+                f"{len(items)} is too many bro. cut it to <b>{hi}</b> — the rest is a wish list.",
                 parse_mode=ParseMode.HTML)
             return
         self.db.ensure_day(target)
@@ -409,14 +407,14 @@ class LockstepBot:
             # goals still open as buttons and let him tap one.
             goals = self._goals_text(today)
             if not goals:
-                await update.message.reply_text("No goals set for today. Send /goals.")
+                await update.message.reply_text("no goals for today yet. /goals")
                 return
             await update.message.reply_text(
                 goals, parse_mode=ParseMode.HTML,
                 reply_markup=self._goal_buttons(today))
             return
         if not self.db.mark_goal(today, int(parts[1]), True):
-            await update.message.reply_text("No goal with that number today. /goals to see them.")
+            await update.message.reply_text("don't have a goal with that number. /goals to check")
             return
         self.ledger.append("goal_done", {"date": today.isoformat(), "idx": int(parts[1])})
         rows = self.db.goals(today)
@@ -448,7 +446,7 @@ class LockstepBot:
 
         row = self.db.day(night)
         if row and int(row["bed_offset_minutes"] or 0):
-            await update.message.reply_text("You already used it tonight.")
+            await update.message.reply_text("you already used it tonight 😅")
             return
 
         last = self.db.one(
@@ -461,14 +459,14 @@ class LockstepBot:
                     f"Used it on <b>{last['date']}</b>, {gap} day"
                     f"{'s' if gap != 1 else ''} ago. It's once every {every} days — "
                     f"next one on <b>{date.fromisoformat(last['date']) + timedelta(days=every)}</b>.\n\n"
-                    "Go to bed.", parse_mode=ParseMode.HTML)
+                    "go to bed man.", parse_mode=ParseMode.HTML)
                 return
 
         reason = update.message.text.partition(" ")[2].strip()
         if len(reason) < 12:
             await update.message.reply_text(
-                "What for? Say it properly — <code>/latenight hackathon "
-                "submission due at midnight</code>.\n\nThen a photo that shows it.",
+                "what for? tell me properly — <code>/latenight hackathon "
+                "submission due at midnight</code>.\n\nthen send a pic that shows it.",
                 parse_mode=ParseMode.HTML)
             return
 
@@ -476,8 +474,8 @@ class LockstepBot:
             "action": "latenight_photo", "date": night, "reason": reason,
             "hours": hours}
         await update.message.reply_text(
-            f"Now the photo — <b>{reason}</b>.\n\n"
-            "Friends and where you are, or the work on screen. Not your ceiling.",
+            f"ok, <b>{reason}</b>. send the pic —\n\n"
+            "your friends and where you are, or the work on screen. not your ceiling lol",
             parse_mode=ParseMode.HTML)
 
     async def cmd_outside(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -502,30 +500,29 @@ class LockstepBot:
 
         if not self.engine.in_window(now):
             await update.message.reply_text(
-                "Nothing's owed right now. Just go.")
+                "nothing due rn, just go 👍")
             return
 
         until = self.engine.outside_until(today)
         if until is not None and now < until:
             left = int((until - now).total_seconds() // 60)
             await update.message.reply_text(
-                f"Already running — <b>{left} min</b> left, until "
+                f"you're already covered — <b>{left} min</b> left, till "
                 f"<b>{until:%H:%M}</b>.", parse_mode=ParseMode.HTML)
             return
 
         used = self.engine.outside_used(today)
         if used >= cap:
             await update.message.reply_text(
-                f"That's {used} of {cap} today. An excuse you can use all day "
-                "isn't an excuse.")
+                f"that's {used}/{cap} today already. can't use it all day bro.")
             return
 
         self.pending[update.effective_chat.id] = {
             "action": "outside_photo", "minutes": minutes, "left": cap - used - 1}
         await update.message.reply_text(
-            "Photo of where you are — street, yard, podyezd, bus stop.\n\n"
-            f"Buys <b>{minutes} min</b> of quiet if you lose signal. Anything due "
-            "while you're out still misses.", parse_mode=ParseMode.HTML)
+            "send me a pic of where you are — street, yard, podyezd, whatever.\n\n"
+            f"then no siren for <b>{minutes} min</b> if you lose signal. stuff that's "
+            "due while you're out still counts as missed tho.", parse_mode=ParseMode.HTML)
 
     def _block_for_steps(self, arg: str, now: datetime):
         """The block he means: the one running now, or the nth of the day."""
@@ -560,15 +557,14 @@ class LockstepBot:
         block = self._block_for_steps(arg, now)
         if block is None:
             await update.message.reply_text(
-                "No block to break down. Send /plan first, or /steps 2 for the "
-                "second block of the day.")
+                "nothing to break down yet — send /plan first. or /steps 2 for "
+                "your second block.")
             return
 
         cached = bool(self.coach.steps_for(now.date(), block["label"]))
         if not cached and self.coach.budget_left(now.date()) <= 0:
             await update.message.reply_text(
-                "Out of coach for today — it shares a quota with the photo "
-                "checks, and those come first.")
+                "I'm out of juice for today, gotta save it for checking your photos. tomorrow 🙏")
             return
 
         await update.message.chat.send_action("typing")
@@ -577,11 +573,10 @@ class LockstepBot:
         except Exception as exc:                              # noqa: BLE001
             log.warning("coach breakdown failed: %s", exc)
             await update.message.reply_text(
-                "Can't reach the coach. Start with the smallest piece you "
-                "can name.")
+                "my brain's lagging rn. just start with the smallest bit you can think of.")
             return
         if not steps:
-            await update.message.reply_text("Got nothing useful back. Try again.")
+            await update.message.reply_text("hm, got nothing. try again?")
             return
         blocks = self.db.blocks(now.date())
         bi = next((i for i, b in enumerate(blocks) if b["id"] == block["id"]), 0)
@@ -649,9 +644,9 @@ class LockstepBot:
             lo, hi = self._goal_conf()
             self.pending[update.effective_chat.id] = {"action": "goals", "date": target}
             await update.message.reply_text(
-                f"Goals first. What are the <b>{lo}-{hi} things</b> "
+                f"goals first bro. what are the <b>{lo}-{hi} things</b> "
                 f"{target:%A %d %B} is for?\n\n"
-                "One per line, then send the plan again.",
+                "one per line, then resend the plan.",
                 parse_mode=ParseMode.HTML)
             return
         # The TARGET day's window, not today's. A Saturday plan written on Friday
@@ -672,9 +667,8 @@ class LockstepBot:
         if existing and existing["plan_locked"] and target <= now.date() \
                 and self.engine.in_window(now):
             await update.message.reply_text(
-                "Today's plan is already locked and the window is open. "
-                "You don't get to rewrite the plan you're being held to. "
-                "/offset if something broke.")
+                "today's plan is locked and we're already in the window. "
+                "can't rewrite it now. /offset if something actually came up.")
             return
 
         self.db.ensure_day(target)
@@ -709,7 +703,7 @@ class LockstepBot:
                      "from now to the end of the day.")
 
         await update.message.reply_text(
-            f"✅ Locked in for <b>{target:%A %d %B}</b>\n\n{planner.render(blocks)}\n\n{tail}",
+            f"✅ Locked in for <b>{target:%A %d %B}</b> 🤝\n\n{planner.render(blocks)}\n\n{tail}",
             parse_mode=ParseMode.HTML)
 
     async def cmd_replan(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -719,11 +713,11 @@ class LockstepBot:
         now = self.cfg.now()
         today = now.date()
         if not self.engine.has_plan(today):
-            await update.message.reply_text("No plan today yet — use /plan.")
+            await update.message.reply_text("no plan for today yet — /plan")
             return
         if not self.engine.in_window(now):
             await update.message.reply_text(
-                "The window isn't open. Use /plan for a future day.")
+                "we're not in the window rn. /plan for another day.")
             return
 
         minute = now.hour * 60 + now.minute
@@ -737,11 +731,11 @@ class LockstepBot:
                    for b in self.db.blocks(today) if b["end_min"] > minute]
             self.pending[update.effective_chat.id] = {"action": "replan"}
             await update.message.reply_text(
-                f"Rewriting <b>{minute//60:02d}:{minute%60:02d}–"
+                f"ok, rewriting <b>{minute//60:02d}:{minute%60:02d}–"
                 f"{end//60:02d}:{end%60:02d}</b>. What's done stays done, and the "
                 f"day still ends at {end//60:02d}:{end%60:02d}.\n\n"
-                f"Currently:\n{planner.render(cur)}\n\n"
-                f"Send the replacement, same format.",
+                f"right now it's:\n{planner.render(cur)}\n\n"
+                f"send me the new version, same format.",
                 parse_mode=ParseMode.HTML)
             return
         await self._accept_replan(update, body)
@@ -809,7 +803,7 @@ class LockstepBot:
         raw = update.message.text.partition(" ")[2].strip()
         if not raw:
             await update.message.reply_text(
-                "What and when?\n\n"
+                "what and when?\n\n"
                 "<code>/remind 3 sep 14:40 doctor's appointment</code>\n"
                 "<code>/remind tomorrow 09:00 call mum</code>",
                 parse_mode=ParseMode.HTML)
@@ -826,7 +820,7 @@ class LockstepBot:
         self.ledger.append("reminder_set", {"at": got.when.isoformat(), "text": got.text})
         await update.message.reply_text(
             f"🔔 <b>{html.escape(got.text)}</b>\n{got.when:%A %d %B, %H:%M}\n\n"
-            f"Nudges the night before, that morning, an hour ahead.\n"
+            f"I'll remind you the night before, that morning, and an hour before.\n"
             f"<code>/forget {cur.lastrowid}</code> to drop it.",
             parse_mode=ParseMode.HTML)
 
@@ -835,7 +829,7 @@ class LockstepBot:
         rows = self.db.q("SELECT * FROM reminders WHERE at_ts >= ? ORDER BY at_ts",
                          (now.isoformat(),))
         if not rows:
-            await update.message.reply_text("Nothing coming up.")
+            await update.message.reply_text("nothing coming up 👌")
             return
         lines = []
         for r in rows:
@@ -852,11 +846,11 @@ class LockstepBot:
             return
         parts = update.message.text.split()
         if len(parts) < 2 or not parts[1].isdigit():
-            await update.message.reply_text("Which one? /reminders shows the numbers.")
+            await update.message.reply_text("which one? /reminders shows the numbers")
             return
         row = self.db.one("SELECT text FROM reminders WHERE id = ?", (int(parts[1]),))
         if not row:
-            await update.message.reply_text("No reminder with that number.")
+            await update.message.reply_text("no reminder with that number")
             return
         self.db.run("DELETE FROM reminders WHERE id = ?", (int(parts[1]),))
         await update.message.reply_text(f"Dropped: {html.escape(row['text'])}",
@@ -868,7 +862,7 @@ class LockstepBot:
     async def cmd_unblock(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
             await update.message.reply_text(
-                "Only your father can open this, from his own Telegram.")
+                "only your dad can open that, from his phone.")
             return
         now = self.cfg.now()
         conf = self.cfg.raw.get("apps", {})
@@ -892,7 +886,7 @@ class LockstepBot:
         await self.send_user(
             f"🔓 Your father opened the blocker for <b>{mins} min</b>, until "
             f"{until:%H:%M}. It shuts by itself.\n\n"
-            "Do the thing you asked for, not the other thing.")
+            "do what you asked for it for, not the other stuff 👀")
 
     async def cmd_block(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
@@ -901,13 +895,13 @@ class LockstepBot:
         self.db.set_lock(apps_open_until=None)
         self.ledger.append("apps_relocked", {})
         await update.message.reply_text("🔒 Closed again.")
-        await self.send_user("🔒 Blocker closed again by your father.")
+        await self.send_user("🔒 your dad closed the blocker again.")
 
     async def cmd_today(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         now = self.cfg.now()
         today = now.date()
         if not self.engine.has_plan(today):
-            await update.message.reply_text("No plan for today. Send /plan.")
+            await update.message.reply_text("no plan for today. /plan")
             return
         blocks = [planner.Block(b["start_min"], b["end_min"], b["label"], b["category"])
                   for b in self.db.blocks(today)]
@@ -930,16 +924,16 @@ class LockstepBot:
         reason = update.message.text.partition(" ")[2].strip()
 
         if not self.engine.in_window(now):
-            await update.message.reply_text("The window isn't open. Nothing to offset.")
+            await update.message.reply_text("not in the window, nothing to push back.")
             return
         row = self.db.ensure_day(today)
         if row["offsets_used"] >= int(self.cfg.offset["max_per_day"]):
             await update.message.reply_text(
-                "You've already used today's offset. One per day was the deal.")
+                "you already used today's offset. one a day, that was the deal.")
             return
         if len(reason) < 10:
             await update.message.reply_text(
-                "What happened? One sentence:\n"
+                "what happened? one sentence:\n"
                 "<code>/offset stayed back for a department meeting</code>",
                 parse_mode=ParseMode.HTML)
             return
@@ -947,8 +941,8 @@ class LockstepBot:
         if self.cfg.offset["require_photo"]:
             self.pending[update.effective_chat.id] = {"action": "offset_proof", "reason": reason}
             await update.message.reply_text(
-                f"Noted: <i>{html.escape(reason)}</i>\n\n"
-                "Now a photo of where you are, timestamp visible.",
+                f"got it: <i>{html.escape(reason)}</i>\n\n"
+                "now send a photo of where you are, with the time showing.",
                 parse_mode=ParseMode.HTML)
         else:
             await self._grant_offset(update, reason, None)
@@ -994,13 +988,13 @@ class LockstepBot:
         why = self._why_text()
         if not why:
             await update.message.reply_text(
-                "You haven't written it yet. Put it in the file named by "
+                "you haven't written it yet. put it in the file at "
                 "<code>commitment.why_file</code> and I'll read it back whenever "
                 "you ask — and whenever you try to stop.",
                 parse_mode=ParseMode.HTML)
             return
         await update.message.reply_text(
-            f"<b>In your own words:</b>\n\n<i>{html.escape(why[:3000])}</i>",
+            f"<b>your words, not mine:</b>\n\n<i>{html.escape(why[:3000])}</i>",
             parse_mode=ParseMode.HTML)
 
     async def cmd_disable(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1015,7 +1009,7 @@ class LockstepBot:
         if not self._is_user(update):
             return
         if not self.lock.enabled:
-            await update.message.reply_text("It's already off.")
+            await update.message.reply_text("it's already off.")
             return
         if not self.lock.guardian_id():
             await update.message.reply_text(
@@ -1027,7 +1021,7 @@ class LockstepBot:
             # Before anything else, your own argument. Written by you, on a day
             # you were thinking clearly, for exactly this moment.
             await update.message.reply_text(
-                f"<b>You wrote this, for now:</b>\n\n"
+                f"<b>hold up. you wrote this for exactly this moment:</b>\n\n"
                 f"<i>{html.escape(why[:3000])}</i>\n\n"
                 f"— — —",
                 parse_mode=ParseMode.HTML)
@@ -1042,7 +1036,7 @@ class LockstepBot:
     async def _handle_disable_reason(self, update: Update, reason: str) -> None:
         if len(reason) < 15:
             await update.message.reply_text(
-                "Longer than that. He's the one reading it.")
+                "write more than that, your dad's gonna read it.")
             return
         self.pending.pop(update.effective_chat.id, None)
         self.ledger.append("disable_requested", {"reason": reason})
@@ -1052,8 +1046,8 @@ class LockstepBot:
             "Agree? <code>/stopbot</code>\n"
             "Don't? Do nothing — it stays on. You owe him no reply.")
         await update.message.reply_text(
-            "Sent to your father. If he says nothing, it stays on — "
-            "which is how you set it up.")
+            "sent it to your dad. if he doesn't answer, it stays on — "
+            "that's how you set it up.")
 
     async def cmd_stopbot(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Agrees to stop — in 24 hours, not now."""
@@ -1072,10 +1066,10 @@ class LockstepBot:
             "<code>/stopnow</code> for a real emergency.",
             parse_mode=ParseMode.HTML)
         await self.send_user(
-            f"⏳ <b>Your father agreed — it stops at {at:%H:%M on %d %b}.</b>\n\n"
-            f"Not now. {hours} hours. Everything runs as normal until then, and "
-            "if you still want out tomorrow you get out.\n\n"
-            "<code>/nevermind</code> if it's already passed.")
+            f"⏳ <b>your dad said yes — it stops at {at:%H:%M on %d %b}.</b>\n\n"
+            f"not now tho, in {hours} hours. everything runs like normal till then, "
+            "and if you still want out tomorrow, you're out.\n\n"
+            "<code>/nevermind</code> if the feeling's gone.")
 
     async def cmd_stopnow(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """The emergency door. Deliberately a separate word."""
@@ -1087,7 +1081,7 @@ class LockstepBot:
         self.lock.disable(reason, self.cfg.now())
         await update.message.reply_text("🔴 Stopped, immediately. /startbot when you want it back.")
         await self.send_user(
-            "🔴 <b>Your father stopped it immediately.</b>\n\n"
+            "🔴 <b>your dad stopped it.</b>\n\n"
             "It stays off until he restarts it.")
 
     async def cmd_cancelstop(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1096,7 +1090,7 @@ class LockstepBot:
             return
         if self.lock.cancel_stop():
             await update.message.reply_text("✅ Called off. It keeps running.")
-            await self.send_user("Your father called off the stop. It keeps running.")
+            await self.send_user("your dad called off the stop. it keeps going 💪")
         else:
             await update.message.reply_text("Nothing was scheduled.")
 
@@ -1107,8 +1101,8 @@ class LockstepBot:
         if self.lock.cancel_stop():
             self.ledger.append("stop_withdrawn_by_user", {})
             await update.message.reply_text(
-                "Called off. It keeps running.\n\n"
-                "Worth noticing: the feeling passed inside a day. It usually does.")
+                "called off, it keeps running 💪\n\n"
+                "notice how the feeling passed in a day? it usually does.")
             await self.send_guardian(
                 f"✅ {self.cfg.user_name} withdrew the request to stop. The urge passed. "
                 "Nothing for you to do.")
@@ -1121,14 +1115,14 @@ class LockstepBot:
             return
         self.lock.enable(self.cfg.now())
         await update.message.reply_text("🟢 System running again.")
-        await self.send_user("🟢 <b>Your father restarted the system.</b>")
+        await self.send_user("🟢 <b>your dad turned it back on.</b>")
 
     async def cmd_enable(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if self._is_guardian(update):
             await self.cmd_startbot(update, _ctx)
             return
         await update.message.reply_text(
-            "Not yours to switch. Your father sends /startbot.")
+            "not your call bro, your dad sends /startbot.")
 
     async def cmd_setguardian(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -1178,14 +1172,14 @@ class LockstepBot:
             f"🔔 TEST siren armed — <b>{secs}s</b>. Starts within a minute.\n\n"
             "While it's going, check it survives: <b>silent mode</b>, "
             "<b>media volume at zero</b>. Ringtone and vibrate still normal.\n\n"
-            "Goes quiet on silent? Wrong audio stream. /stopsiren to end it.",
+            "if it goes quiet on silent, it's on the wrong audio stream. /stopsiren to stop.",
             parse_mode=ParseMode.HTML)
 
     async def cmd_stopsiren(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
             return
         self.db.set_lock(siren_test_until=None)
-        await update.message.reply_text("🔕 Test siren off. Stops within a minute.")
+        await update.message.reply_text("🔕 test siren off, stops within a minute.")
 
     async def cmd_more(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Give the task you're on right now more time."""
@@ -1197,14 +1191,14 @@ class LockstepBot:
         minutes = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 30
 
         if not self.engine.in_window(now):
-            await update.message.reply_text("The window isn't open — nothing to extend.")
+            await update.message.reply_text("not in the window, nothing to extend.")
             return
         if not self.engine.has_plan(today):
-            await update.message.reply_text("No plan today. Send /plan.")
+            await update.message.reply_text("no plan today. /plan")
             return
         block = self.engine.current_block(today, now)
         if block is None:
-            await update.message.reply_text("You're not inside a planned block right now.")
+            await update.message.reply_text("you're not in a block right now.")
             return
 
         cap = int(self.cfg.raw.get("extend", {}).get("max_minutes_per_day", 90))
@@ -1213,7 +1207,7 @@ class LockstepBot:
         if used + minutes > cap:
             await update.message.reply_text(
                 f"That's {used + minutes} min for the day and the limit is {cap} "
-                f"({used} used).\n\nWrite tomorrow's plan with bigger blocks.")
+                f"({used} used).\n\nmake tomorrow's blocks bigger.")
             return
 
         # You can only extend something you have already proven you're doing.
@@ -1257,8 +1251,8 @@ class LockstepBot:
         now = self.cfg.now()
         if self.lock.commitment_active(now.date()):
             await update.message.reply_text(
-                "No. Mute on a bad evening is just the way out with a nicer "
-                "name.\n\nSomething real? /offset, or ask your father for /pause.")
+                "nah bro. muting on a bad evening is just quitting with extra steps.\n\n"
+                "if something real happened: /offset, or ask your dad for /pause.")
             return
         parts = update.message.text.split()
         hours = float(parts[1]) if len(parts) > 1 and parts[1].replace(".", "").isdigit() else 3
@@ -1276,7 +1270,7 @@ class LockstepBot:
         if not self._is_user(update):
             return
         self.db.set_lock(muted_until=None)
-        await update.message.reply_text("🔔 Siren back on.")
+        await update.message.reply_text("🔔 siren's back on.")
 
     async def cmd_logs(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Read-only log access, so you never need SSH to diagnose anything.
@@ -1315,8 +1309,8 @@ class LockstepBot:
             return
         self.ledger.append("restart_requested", {"by": update.effective_chat.id})
         await update.message.reply_text(
-            "🔄 Restarting. Back in about ten seconds.\n\n"
-            "(Not an off switch — it comes straight back.)")
+            "🔄 restarting, back in like 10 seconds.\n\n"
+            "(not an off switch, it comes right back)")
         import asyncio as _a
         _a.get_running_loop().call_later(1.0, lambda: os._exit(0))
 
@@ -1324,7 +1318,7 @@ class LockstepBot:
         if self.pending.pop(update.effective_chat.id, None):
             await update.message.reply_text("Dropped.")
         else:
-            await update.message.reply_text("Nothing pending.")
+            await update.message.reply_text("nothing pending.")
 
     # ======================================================================
     # guardian commands
@@ -1353,11 +1347,10 @@ class LockstepBot:
             "If he asks you to stop it, you don't have to reply.",
             parse_mode=ParseMode.HTML)
         await self.send_user(
-            f"🔒 <b>Your father started it. Runs to {end}.</b>\n\n"
-            "Only he can stop it. No password anywhere — nothing to find or "
-            "forget.\n\n"
-            "This is the you that wanted this, holding the door for the you "
-            "that won't.")
+            f"🔒 <b>it's on. your dad started it, runs till {end}.</b>\n\n"
+            "only he can stop it. no password anywhere.\n\n"
+            "this is the you that wanted it, holding the door for the you "
+            "that won't. let's go.")
 
     async def cmd_pause(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
@@ -1373,7 +1366,7 @@ class LockstepBot:
         self.lock.pause(until, reason)
         await update.message.reply_text(f"⏸ Paused until {until:%d %b %H:%M}.")
         await self.send_user(
-            f"⏸ Your father paused the system until <b>{until:%d %b %H:%M}</b>.\n"
+            f"⏸ your dad paused it until <b>{until:%d %b %H:%M}</b>.\n"
             f"Reason: <i>{html.escape(reason)}</i>", )
 
     async def cmd_resume(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1381,7 +1374,7 @@ class LockstepBot:
             return
         self.lock.enable(self.cfg.now())
         await update.message.reply_text("▶️ Resumed.")
-        await self.send_user("▶️ Pause lifted. Back on.")
+        await self.send_user("▶️ pause is over, we're back.")
 
     async def cmd_extend(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_guardian(update):
@@ -1414,9 +1407,8 @@ class LockstepBot:
         priv = self.cfg.raw.get("privacy", {})
         if priv.get("warn_on_gps", True) and images.has_gps(raw):
             await update.message.reply_text(
-                "⚠️ That photo carried GPS coordinates. I stripped them before doing "
-                "anything with it. Turn location tagging off in your camera — "
-                "every other app keeps them.")
+                "⚠️ heads up, that pic had your GPS location in it. I removed it, but turn "
+                "location off in your camera — other apps won't remove it.")
         # Downscaled and metadata-stripped before it goes to Google or to disk.
         blob, mime = images.prepare(raw, int(priv.get("max_dimension", 1024)))
 
@@ -1434,7 +1426,7 @@ class LockstepBot:
             return
 
         if not self.lock.enabled:
-            await update.message.reply_text("System is off. Nothing to prove.")
+            await update.message.reply_text("it's off rn, nothing to prove.")
             return
 
         # The bed photo is owed after the window has already shut, so it has to
@@ -1447,15 +1439,15 @@ class LockstepBot:
                 return
 
         if not self.engine.in_window(now):
-            await update.message.reply_text("Outside the window — nothing is being asked.")
+            await update.message.reply_text("we're outside the window, nothing needed.")
             return
         if not self.engine.has_plan(today):
-            await update.message.reply_text("There's no plan for today yet. Send /plan first.")
+            await update.message.reply_text("no plan for today yet, /plan first.")
             return
 
         cp = self.engine.current_checkpoint(today, now)
         if cp is None:
-            await update.message.reply_text("Nothing outstanding right now. 👍")
+            await update.message.reply_text("you're all caught up 👍")
             return
 
         label = cp["label"] or "your planned task"
@@ -1473,8 +1465,8 @@ class LockstepBot:
             self.ledger.append("photo_rejected",
                                {"checkpoint": cp["id"], "code": verdict.failure_code})
             await update.message.reply_text(
-                f"❌ Not counted.\n\n{html.escape(verdict.reason)}\n\n"
-                "Send another one — the checkpoint is still open.",
+                f"❌ doesn't count.\n\n{html.escape(verdict.reason)}\n\n"
+                "send another one, it's still open.",
                 parse_mode=ParseMode.HTML)
             return
 
@@ -1493,7 +1485,7 @@ class LockstepBot:
             note += "\n⚠️ The vision model was unreachable; this one is flagged in the log."
             await self.send_guardian("⚠️ Vision model unreachable — a photo was accepted unchecked.")
         await update.message.reply_text(
-            f"✅ Counted. {sc['hit']}/{sc['due']} today.{note}", parse_mode=ParseMode.HTML)
+            f"✅ nice, counted. {sc['hit']}/{sc['due']} today.{note}", parse_mode=ParseMode.HTML)
 
     async def _handle_bed_photo(self, update: Update, night: date, bed,
                                 blob: bytes, mime: str, now: datetime) -> None:
@@ -1507,8 +1499,8 @@ class LockstepBot:
             self.ledger.append("photo_rejected",
                                {"checkpoint": bed["id"], "code": verdict.failure_code})
             await update.message.reply_text(
-                f"❌ Not counted.\n\n{html.escape(verdict.reason)}\n\n"
-                "The siren is still running.", parse_mode=ParseMode.HTML)
+                f"❌ doesn't count.\n\n{html.escape(verdict.reason)}\n\n"
+                "siren's still going.", parse_mode=ParseMode.HTML)
             return
         path = self._save_photo(blob, night, "bed")
         self.db.run(
@@ -1530,8 +1522,8 @@ class LockstepBot:
             "other", now, mime=mime, kind="activity")
         if not verdict.ok:
             await update.message.reply_text(
-                f"❌ Not accepted.\n\n{html.escape(verdict.reason)}\n\n"
-                "Send one that shows it, or go to bed.", parse_mode=ParseMode.HTML)
+                f"❌ nope.\n\n{html.escape(verdict.reason)}\n\n"
+                "send one that actually shows it, or go to bed.", parse_mode=ParseMode.HTML)
             return
 
         self.pending.pop(update.effective_chat.id, None)
@@ -1553,7 +1545,7 @@ class LockstepBot:
             f"🌙 <b>{hours} hours.</b> Bed photo now due at "
             f"<b>{new_bed:%H:%M}</b>, siren until "
             f"<b>{self.engine.bed_cutoff(night):%H:%M}</b>.\n\n"
-            "That's this week's one. Your father has been told.",
+            "that's your one for the week. your dad knows.",
             parse_mode=ParseMode.HTML)
         await self.send_guardian(
             f"🌙 {self.cfg.user_name} used the weekly late night ({hours}h).\n"
@@ -1569,8 +1561,8 @@ class LockstepBot:
             "other", now, mime=mime, kind="outside")
         if not verdict.ok:
             await update.message.reply_text(
-                f"❌ No.\n\n{html.escape(verdict.reason)}\n\n"
-                "Try again — the door, the stairs, the yard.",
+                f"❌ nah.\n\n{html.escape(verdict.reason)}\n\n"
+                "try again — the door, the stairs, the yard.",
                 parse_mode=ParseMode.HTML)
             return
 
@@ -1581,9 +1573,8 @@ class LockstepBot:
                            {"date": now.date().isoformat(), "minutes": minutes,
                             "until": until.isoformat()})
         await update.message.reply_text(
-            f"🚶 <b>Quiet until {until:%H:%M}.</b> Losing signal won't set it off "
-            f"till then. {left} left today.\n\n"
-            "Anything due while you're out still misses.", parse_mode=ParseMode.HTML)
+            f"🚶 <b>ok, no siren till {until:%H:%M}.</b> go. {left} left today.\n\n"
+            "stuff due while you're out still counts as missed.", parse_mode=ParseMode.HTML)
 
     def _save_photo(self, blob: bytes, day: date, tag: str) -> str | None:
         """Keep what the policy allows and no more.
@@ -1657,13 +1648,12 @@ class LockstepBot:
         could let you off would be the easiest off-switch in the system.
         """
         if not self.coach.enabled:
-            await update.message.reply_text("Send a photo, or /help.")
+            await update.message.reply_text("send a pic, or /help")
             return
         now = self.cfg.now()
         if self.coach.budget_left(now.date()) <= 0:
             await update.message.reply_text(
-                "Out of coach for today — it shares a quota with the photo "
-                "checks, and those come first. Tomorrow.")
+                "I'm out of juice for today, gotta save it for checking your photos. tomorrow 🙏")
             return
         await update.message.chat.send_action("typing")
         try:
@@ -1671,10 +1661,10 @@ class LockstepBot:
         except Exception as exc:                              # noqa: BLE001
             log.warning("coach reply failed: %s", exc)
             await update.message.reply_text(
-                "Can't reach the coach right now.")
+                "can't think straight rn, message me again in a bit")
             return
         if not out:
-            await update.message.reply_text("Nothing useful came back. Say it again?")
+            await update.message.reply_text("sorry, blanked. say that again?")
             return
         await update.message.reply_text(out[:3900])
 
@@ -1701,10 +1691,15 @@ class LockstepBot:
         at a time rather than sixty. The notification still fires -- that is the
         entire point -- but the history stays readable.
         """
+        row = self.db.lock()
         if not self.cfg.esc.get("telegram_poke", True):
+            # Switched off: the Automate siren is the alarm, and a message every
+            # minute on top of it was just noise. Clear whatever is left over.
+            if row["poke_message_id"]:
+                await self._delete_poke(row["poke_message_id"])
+                self.db.set_lock(poke_message_id=None)
             return
         st = self.engine.agent_state(now)
-        row = self.db.lock()
         if not st.phone_alarm:
             # Clear the last one on the way out, so a solved day leaves nothing.
             if row["poke_message_id"]:
@@ -1760,8 +1755,7 @@ class LockstepBot:
             self.lock.cancel_stop()
             self.lock.disable(reason, now)
             await self.send_user(
-                "🔴 <b>Time's up. It's off.</b>\n\n"
-                "Your father restarts it with /startbot.")
+                "🔴 <b>it's off.</b>\n\nyour dad can turn it back on with /startbot.")
             await self.send_guardian(
                 f"🔴 The delay has run out and the system has stopped.\n"
                 f"Reason given: <i>{html.escape(reason)}</i>\n\n"
@@ -1777,10 +1771,9 @@ class LockstepBot:
         if st.active and st.level > self.last_level:
             self.last_level = st.level
             await self.send_user(
-                f"🔺 <b>{st.debt_minutes} minutes behind.</b> {html.escape(st.headline)}\n"
+                f"🔺 <b>bro, {st.debt_minutes} minutes behind.</b> {html.escape(st.headline)}\n"
                 f"{html.escape(st.detail)}\n\n"
-                f"Phone's now sounding {st.alarm_repeats}× a minute. Stops when a "
-                f"valid photo lands.")
+                f"siren's going {st.alarm_repeats}× a minute now. send the pic and it stops.")
         elif not st.active:
             self.last_level = 0
 
@@ -1849,7 +1842,7 @@ class LockstepBot:
             asks = {
                 "blocker_toggle": (
                     f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"Screenshot {blocker} <b>running</b>, taskbar clock in shot."),
+                    f"screenshot {blocker} <b>running</b>, with the taskbar clock in it."),
                 "blocker_allow": (
                     f"🔒 <b>{due:%H:%M}</b> — {label}\n\n"
                     f"<b>Shot 2 of 2.</b> Open the block's details and screenshot "
@@ -1860,15 +1853,15 @@ class LockstepBot:
                     f"Screenshot what this block covers."),
                 "activity": (
                     f"📸 <b>{due:%H:%M}</b> — {label}\n\n"
-                    f"Photo of you actually doing it, timestamp visible."),
+                    f"send a pic of you doing it, with the time showing."),
                 "bed": (
                     f"🛏 <b>{due:%H:%M}</b> — <b>bedtime.</b>\n\n"
-                    f"Photo of your bed, opened. Siren runs till it lands."),
+                    f"send a pic of your bed, opened. siren runs till you do."),
             }
             body = asks.get(kind, asks["activity"])
             if kind == "activity":
-                body += "\n\nNo face, no logins, nothing that shows where you are."
-            body += f"\n\n{self.cfg.grace_min} min."
+                body += "\n\n(no face, no logins, nothing that shows where you live)"
+            body += f"\n\nyou got {self.cfg.grace_min} min."
             await self.send_user(body)
             self.ledger.append("checkpoint_asked",
                                {"checkpoint": p["checkpoint_id"], "kind": kind})
@@ -1877,34 +1870,34 @@ class LockstepBot:
             labels = p.get("labels") or [p.get("label", "your planned task")]
             what = ", ".join(html.escape(x) for x in labels)
             n = p.get("count", 1)
-            prefix = f"⏰ Grace period gone ({n} checkpoints)" if n > 1 else "⏰ Grace period gone"
+            prefix = f"⏰ time's up ({n} checkpoints)" if n > 1 else "⏰ time's up"
             # This used to say "Escalation has started" the moment the grace ran
             # out, while phone_alarm_after_min held the siren back for several
             # more minutes. So the message announced a siren that was not coming
             # yet, and the silence read as a broken system rather than a
             # deliberate wait. Say what is actually true, and when.
             wait = int(self.cfg.esc.get("phone_alarm_after_min", 0))
-            when = ("Escalation has started — it stops the moment a valid photo lands."
+            when = ("siren has started — send the pic and it stops."
                     if wait <= 0 else
-                    f"The siren starts in {wait} min unless a valid photo lands first.")
+                    f"siren starts in {wait} min unless you send it first.")
             await self.send_user(f"{prefix} for <b>{what}</b>. {when}")
             self.ledger.append("checkpoint_overdue",
                                {"checkpoint": p["checkpoint_id"], "count": n})
 
         elif act.kind == "outage_amnesty":
             await self.send_user(
-                f"🔌 Server was down ~{p['minutes']} min. {p['excused']} checkpoints "
-                f"in that gap are void — not on you.")
+                f"🔌 my bad, server was down ~{p['minutes']} min. {p['excused']} checkpoints "
+                f"in that gap are void, not on you.")
             await self.send_guardian(
                 f"🔌 System was offline ~{p['minutes']} min; "
                 f"{p['excused']} checkpoints voided. Not his doing.")
 
         elif act.kind == "phone_silent":
             await self.send_user(
-                f"📵 <b>Phone silent for {p['minutes']} min.</b> The siren is dead "
-                "right now.\n\n"
+                f"📵 <b>your phone hasn't checked in for {p['minutes']} min</b>, so the siren "
+                "is dead rn.\n\n"
                 f"Open <b>{self.cfg.esc.get('agent_app', 'Automate')}</b>, press Start on "
-                "both flows. Checkpoints carry on regardless.")
+                "both flows 🙏")
             if p.get("escalate"):
                 await self.send_guardian(
                     f"📵 {self.cfg.user_name}'s phone has been silent {p['minutes']} min "
@@ -1912,27 +1905,27 @@ class LockstepBot:
 
         elif act.kind == "bed_overdue":
             await self.send_user(
-                f"🛏 <b>{p['minutes']} min past bedtime.</b> Photo of your bed, "
-                "opened. Siren stops when it lands.\n\n"
-                "Really out, or a real deadline? <code>/latenight reason</code>.")
+                f"🛏 <b>bro it's {p['minutes']} min past bedtime.</b> send a pic of your "
+                "bed, opened, and the siren stops.\n\n"
+                "actually out or on a deadline? <code>/latenight reason</code>")
 
         elif act.kind == "bed_missed":
             await self.send_user(
-                f"🛏 No bed photo came. <b>{p['date']}</b> goes down unfinished.\n\n"
-                "Go to sleep.")
+                f"🛏 no bed pic came, so <b>{p['date']}</b> goes down unfinished.\n\n"
+                "just sleep now, fresh start tomorrow.")
             await self.send_guardian(
                 f"🛏 No bed photo from {self.cfg.user_name} on {p['date']}. The siren "
                 "ran from bedtime to the cutoff.")
 
         elif act.kind == "plan_missing":
             await self.send_user(
-                "⚠️ <b>The window is open and there's no plan for today.</b>\n\n"
-                "Escalation runs until you send one. " + PLAN_HELP)
+                "⚠️ <b>bro, window's open and there's no plan for today.</b>\n\n"
+                "siren runs till you send one. " + PLAN_HELP)
 
         elif act.kind == "plan_nag":
             await self.send_user(
-                f"🗓 Plan for <b>{p['date']}</b> isn't written yet. "
-                f"Due by {self.cfg.plan_due:%H:%M}. Send /plan.")
+                f"🗓 yo, plan for <b>{p['date']}</b> isn't written yet. "
+                f"need it by {self.cfg.plan_due:%H:%M} — /plan")
 
         elif act.kind == "daily_report":
             keep = int(self.cfg.raw.get("privacy", {}).get("retain_days", 7))
@@ -1947,9 +1940,9 @@ class LockstepBot:
 
         elif act.kind == "commitment_over":
             await self.send_user(
-                "🏁 <b>The commitment period is up.</b>\n\n"
-                "It keeps running until you decide. /extend 3 from your father, "
-                "or /disable — no password needed now.")
+                "🏁 <b>you made it — the commitment period is done.</b>\n\n"
+                "it keeps running till you decide. your dad can /extend 3, "
+                "or you can /disable.")
             await self.send_guardian(
                 f"🏁 {self.cfg.user_name}'s commitment period has ended.\n\n"
                 "<code>/extend 3</code> to carry on, or let him stop.")
