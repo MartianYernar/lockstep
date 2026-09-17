@@ -457,7 +457,8 @@ class LockstepBot:
     # ======================================================================
     # the once-a-week late night
     # ======================================================================
-    async def cmd_latenight(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_latenight(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE,
+                            reason: str | None = None) -> None:
         """Two hours past bedtime, once a week, and it has to be earned.
 
         This breaks a rule the README states in bold -- nothing moves the day
@@ -493,7 +494,9 @@ class LockstepBot:
                     "go to bed man.", parse_mode=ParseMode.HTML)
                 return
 
-        reason = update.message.text.partition(" ")[2].strip()
+        if reason is None:
+            reason = update.message.text.partition(" ")[2].strip()
+        reason = reason.strip()
         if len(reason) < 12:
             await update.message.reply_text(
                 "what for? tell me properly — <code>/latenight hackathon "
@@ -2084,8 +2087,20 @@ class LockstepBot:
             return
         now = self.cfg.now()
         if self.coach.budget_left(now.date()) <= 0:
+            if self._bed_owed(now) and self._sounds_late(text):
+                await update.message.reply_text(
+                    "I've used up my AI messages for today, but I got you — "
+                    "starting the late night for this:")
+                await self.cmd_latenight(update, None, reason=text)
+                return
+            cap = int(self.coach.conf.get("max_calls_per_day", 40))
             await update.message.reply_text(
-                "I'm out of juice for today, gotta save it for checking your photos. tomorrow 🙏")
+                f"I've hit my limit of {cap} AI messages for today, so I can't really "
+                "talk till midnight 😩 photos still get checked.\n\n"
+                "what still works:\n"
+                "/latenight reason — 2 more hours tonight (deadline, friends)\n"
+                "/replan — change the rest of today\n"
+                "/tasks · /night · /today")
             return
         await update.message.chat.send_action("typing")
         try:
@@ -2099,6 +2114,12 @@ class LockstepBot:
                 if busy else
                 "something broke on my end, try again in a minute. "
                 "/replan and photos still work")
+            return
+        late, self.coach.last_latenight = self.coach.last_latenight, None
+        if late is not None:
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self.cmd_latenight(update, None, reason=late or text)
             return
         recheck, self.coach.last_recheck = self.coach.last_recheck, None
         if recheck and self._live_reject(now):
@@ -2194,6 +2215,18 @@ class LockstepBot:
         r.update(cp=cp["id"], label=cp["label"] or r["label"],
                  category=cp["category"] or r["category"], kind=cp["kind"] or r["kind"])
         await self._recheck(update, "the plan was just changed to this block", now)
+
+    def _bed_owed(self, now: datetime) -> bool:
+        night = self.engine.bed_night(now)
+        if night is None:
+            return False
+        cp = self.engine.bed_checkpoint(night)
+        return cp is not None and cp["state"] != "satisfied"
+
+    @staticmethod
+    def _sounds_late(text: str) -> bool:
+        low = (text or "").lower()
+        return any(w in low for w in ('deadline', 'дедлайн', 'hackathon', 'submission', 'due', 'competition', 'olympiad', 'олимпиад', 'project', 'проект', 'presentation', 'friends', "can't sleep", 'cant sleep', 'not sleeping'))
 
     def _live_reject(self, now: datetime) -> dict | None:
         """The rejected photo, if it can still be looked at again."""

@@ -136,6 +136,7 @@ class Coach:
         self.foundations = Foundations(db, cfg)
         self.last_recheck: str | None = None
         self.last_judge_was_reason = True
+        self.last_latenight: str | None = None
 
     # -- config ---------------------------------------------------------------
     @property
@@ -246,6 +247,14 @@ class Coach:
         if terms:
             out.append("His shorthand: " + "; ".join(
                 f"{t['term']} = {t['meaning']}" for t in terms))
+
+        bed_night = self.engine.bed_night(now)
+        if bed_night is not None:
+            bcp = self.engine.bed_checkpoint(bed_night)
+            if bcp is not None and bcp["state"] != "satisfied":
+                out.append(f"BEDTIME: it's past his bedtime ({self.engine.bed_due(bed_night):%H:%M}) "
+                           "and the siren wants a photo of his bed, opened. If he has a real "
+                           "deadline or is out with friends, use start_latenight.")
 
         if self.foundations.enabled:
             night = self.foundations.night_of(now)
@@ -424,6 +433,8 @@ class Coach:
         self.last_plan_edits = [a for a in actions
                                 if isinstance(a, dict) and a.get("type") == "edit_plan"
                                 and (a.get("plan") or "").strip()]
+        ln = [a for a in actions if isinstance(a, dict) and a.get("type") == "start_latenight"]
+        self.last_latenight = (ln[0].get("text") or "").strip() if ln else None
         rc = [a for a in actions if isinstance(a, dict) and a.get("type") == "recheck_photo"]
         self.last_recheck = ((rc[0].get("text") or text).strip() or text) if rc else None
         saved = self.apply(actions, now)
@@ -545,6 +556,10 @@ actually told you, never guessed:
 - {"type":"complete_task","task":"#id or title"}  he finished one
 - {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
 - {"type":"add_note","task":"#id or title","text":...}  progress he described
+- {"type":"start_latenight","text":"the reason, in his words"}  when it's past
+  bedtime (BEDTIME below) and he says he has a real deadline or is out with
+  friends. The app then asks him for a photo showing it; that buys 2 hours,
+  once a week. Don't promise it's granted -- the photo decides.
 - {"type":"tick_basic","text":"socks" / "clothes" / "mouth"}  when he says he
   did one of tonight's basics (washed socks, laid out clothes, brushed teeth).
 - {"type":"define","title":"рнкп","text":"what it means"}  when he explains one of
@@ -577,7 +592,8 @@ REPLY_SCHEMA = {
             "properties": {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
-                    "edit_plan", "define", "recheck_photo", "tick_basic"]},
+                    "edit_plan", "define", "recheck_photo", "tick_basic",
+                    "start_latenight"]},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
                 "text": {"type": "STRING"}, "date": {"type": "STRING"},
