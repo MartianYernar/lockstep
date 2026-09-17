@@ -129,8 +129,10 @@ class Coach:
         self.last_plan_edits: list[dict] = []
         db.conn.executescript(SCHEMA)
         db.conn.commit()
-        from .tasks import Tasks
+        from .tasks import Tasks, Terms
         self.tasks = Tasks(db)
+        self.terms = Terms(db)
+        self.last_recheck: str | None = None
 
     # -- config ---------------------------------------------------------------
     @property
@@ -232,6 +234,11 @@ class Coach:
         if debt > 0:
             out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind. "
                        f"The siren is going. He owes a photo. **")
+
+        terms = self.terms.all()
+        if terms:
+            out.append("His shorthand: " + "; ".join(
+                f"{t['term']} = {t['meaning']}" for t in terms))
 
         big = self.tasks.describe(day)
         out.append("His big tasks (the long-running ones):")
@@ -376,7 +383,7 @@ class Coach:
         self.db.run("INSERT INTO coach_log (date, ts, role, text) VALUES (?, ?, ?, ?)",
                     (day.isoformat(), now.isoformat(), role, text[:2000]))
 
-    async def reply(self, text: str, now: datetime) -> str:
+    async def reply(self, text: str, now: datetime, note: str = "") -> str:
         """Answer, and save whatever he told us that is worth remembering.
 
         The model returns its reply and a list of actions. The only things an
@@ -393,8 +400,9 @@ class Coach:
         contents.append(types.Content(
             role="user", parts=[types.Part.from_text(text=text)]))
 
+        ctx = self.context(now) + (("\n" + note) if note else "")
         raw = await self._ask(
-            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)) + ACTIONS,
+            SYSTEM.format(name=self.cfg.user_name, context=ctx) + ACTIONS,
             contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)) + 200,
             schema=REPLY_SCHEMA)
         say, actions = _parse_reply(raw)
@@ -404,6 +412,8 @@ class Coach:
         self.last_plan_edits = [a for a in actions
                                 if isinstance(a, dict) and a.get("type") == "edit_plan"
                                 and (a.get("plan") or "").strip()]
+        rc = [a for a in actions if isinstance(a, dict) and a.get("type") == "recheck_photo"]
+        self.last_recheck = ((rc[0].get("text") or text).strip() or text) if rc else None
         saved = self.apply(actions, now)
         if saved:
             say = (say + "\n\n" if say else "") + "\n".join(f"📌 {x}" for x in saved)
@@ -442,6 +452,10 @@ class Coach:
                         note = (a.get("text") or "").strip()
                         if note and self.tasks.note(t["id"], note):
                             done.append(f"noted on {t['title']}")
+                elif kind == "define":
+                    term = (a.get("title") or a.get("task") or "").strip()
+                    if self.terms.set(term, a.get("text") or "", now):
+                        done.append(f"got it: {term.lower()} = {(a.get('text') or '').strip()}")
                 elif kind == "add_event":
                     what = (a.get("text") or a.get("title") or "").strip()
                     d, hm = _date(a.get("date")), (a.get("time") or "").strip()
@@ -513,6 +527,13 @@ actually told you, never guessed:
 - {"type":"complete_task","task":"#id or title"}  he finished one
 - {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
 - {"type":"add_note","task":"#id or title","text":...}  progress he described
+- {"type":"define","title":"рнкп","text":"what it means"}  when he explains one of
+  his own abbreviations or what a block name really is. The photo checker uses
+  these, so it stops rejecting good photos over a word it doesn't know.
+- {"type":"recheck_photo","text":"his explanation"}  ONLY if the notes below say
+  his last photo was rejected and he's explaining what it shows or what the
+  task means. The app re-checks the same photo with his explanation. You don't
+  decide -- never say it counts. Use define too if he explained a shorthand.
 - {"type":"edit_plan","day":"today" or "tomorrow","plan":"HH:MM-HH:MM label\n..."}
   when he asks you to change his schedule. Write the WHOLE new plan, one block
   per line: for today, from the block he's in now to the end of the window;
@@ -536,7 +557,7 @@ REPLY_SCHEMA = {
             "properties": {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
-                    "edit_plan"]},
+                    "edit_plan", "define", "recheck_photo"]},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
                 "text": {"type": "STRING"}, "date": {"type": "STRING"},

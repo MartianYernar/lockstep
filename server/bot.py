@@ -45,6 +45,9 @@ class LockstepBot:
         from .coach import Coach
         self.coach = Coach(cfg, db, engine)
         self.tasks = self.coach.tasks
+        # The last photo the checker turned down, held in memory only, so he can
+        # explain it instead of re-shooting. Never written to disk.
+        self.last_reject: dict | None = None
         try:
             self.tasks.seed((cfg.raw.get("tasks") or {}).get("seed"), cfg.now())
         except Exception as exc:                              # noqa: BLE001
@@ -1776,8 +1779,8 @@ class LockstepBot:
         label = cp["label"] or "your planned task"
         category = cp["category"] or "other"
         await update.message.chat.send_action("typing")
-        verdict = await self.validator.check(blob, label, category, now, mime=mime,
-                                             kind=cp["kind"] or "activity")
+        verdict = await self.validator.check(blob, self.coach.terms.expand(label), category,
+                                             now, mime=mime, kind=cp["kind"] or "activity")
 
         if not verdict.ok:
             self.db.run("UPDATE checkpoints SET attempts = attempts + 1, verdict = ? WHERE id = ?",
@@ -1787,12 +1790,27 @@ class LockstepBot:
             # a strange way to respect the rule.
             self.ledger.append("photo_rejected",
                                {"checkpoint": cp["id"], "code": verdict.failure_code})
+            # Only a "that's not the task" rejection can be fixed by explaining.
+            # A missing clock or a face in frame can't be talked around.
+            explainable = verdict.failure_code == "mismatch"
+            self.last_reject = ({"cp": cp["id"], "blob": blob, "mime": mime, "at": now,
+                                 "label": label, "category": category,
+                                 "kind": cp["kind"] or "activity",
+                                 "reason": verdict.reason, "tries": 0}
+                                if explainable else None)
             await update.message.reply_text(
                 f"❌ doesn't count.\n\n{html.escape(verdict.reason)}\n\n"
-                "send another one, it's still open.",
+                + ("wrong read? tell me what it is (like \"рнкп is my presentation\") "
+                   "and I'll look again. or send another one."
+                   if explainable else "send another one, it's still open."),
                 parse_mode=ParseMode.HTML)
             return
 
+        await self._count_photo(update, cp, blob, verdict, now)
+
+    async def _count_photo(self, update: Update, cp, blob: bytes, verdict, now: datetime) -> None:
+        today = now.date()
+        self.last_reject = None
         path = self._save_photo(blob, today, f"cp{cp['id']}")
         res = self.engine.satisfy(today, now, cp["id"], verdict.to_json(), path)
         try:
@@ -1987,7 +2005,7 @@ class LockstepBot:
             return
         await update.message.chat.send_action("typing")
         try:
-            out = await self.coach.reply(text, now)
+            out = await self.coach.reply(text, now, note=self._reject_note(now))
         except Exception as exc:                              # noqa: BLE001
             log.warning("coach reply failed: %s", exc)
             busy = any(k in str(exc) for k in ("RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE"))
@@ -1997,6 +2015,12 @@ class LockstepBot:
                 if busy else
                 "something broke on my end, try again in a minute. "
                 "/replan and photos still work")
+            return
+        recheck, self.coach.last_recheck = self.coach.last_recheck, None
+        if recheck and self._live_reject(now):
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self._recheck(update, recheck, now)
             return
         edits, self.coach.last_plan_edits = self.coach.last_plan_edits, []
         prepared = self._prepare_chat_plan(edits[0], now) if edits else None
@@ -2062,6 +2086,61 @@ class LockstepBot:
         since = (now.hour * 60 + now.minute) if day == now.date() else 0
         lost = self._work_minutes(old, since) - self._work_minutes(new, since)
         return lost >= int(conf.get("rewrite_min_lost", 10))
+
+    def _live_reject(self, now: datetime) -> dict | None:
+        """The rejected photo, if it can still be looked at again."""
+        r = self.last_reject
+        if not r:
+            return None
+        cp = self.engine.current_checkpoint(now.date(), now)
+        if (now - r["at"]).total_seconds() > 30 * 60 or cp is None or cp["id"] != r["cp"]:
+            self.last_reject = None
+            return None
+        return r
+
+    def _reject_note(self, now: datetime) -> str:
+        r = self._live_reject(now)
+        if not r:
+            return ""
+        return (f"NOTE: his last photo, for \"{r['label']}\" at {r['at']:%H:%M}, was "
+                f"REJECTED by the photo checker: \"{r['reason']}\". The photo is still "
+                "here. If he's explaining what it shows or what the task means, use "
+                "recheck_photo (and define for a shorthand). If he's not, tell him he "
+                "can explain it or send another.")
+
+    async def _recheck(self, update: Update, explanation: str, now: datetime) -> None:
+        """Look at the same photo again, with his explanation in front of the checker.
+
+        The checker still decides. Explaining only helps when the photo really
+        is consistent with what he says -- and it gets two goes per photo, so it
+        can't be argued into a yes.
+        """
+        r = self._live_reject(now)
+        if r is None:
+            await update.message.reply_text("nothing to look at again — just send the pic.")
+            return
+        if r["tries"] >= 2:
+            self.last_reject = None
+            await update.message.reply_text(
+                "I already looked twice, it's still a no. send a new pic that shows it clearly.")
+            return
+        r["tries"] += 1
+        await update.message.chat.send_action("typing")
+        label = (f"{self.coach.terms.expand(r['label'])}. He explains: \"{explanation[:300]}\". "
+                 "Accept only if the photo is genuinely consistent with that explanation "
+                 "and shows the work actually happening.")
+        verdict = await self.validator.check(r["blob"], label, r["category"], now,
+                                             mime=r["mime"], kind=r["kind"])
+        self.ledger.append("photo_rechecked", {"checkpoint": r["cp"], "ok": verdict.ok,
+                                               "explanation": explanation[:300]})
+        if not verdict.ok:
+            await update.message.reply_text(
+                f"looked again, still a no: {html.escape(verdict.reason)}\n\nsend another one.",
+                parse_mode=ParseMode.HTML)
+            return
+        cp = self.engine.current_checkpoint(now.date(), now)
+        await update.message.reply_text("ok my bad, that makes sense 👍")
+        await self._count_photo(update, cp, r["blob"], verdict, now)
 
     async def _apply_chat_plan(self, update: Update, prepared) -> None:
         """A schedule change he asked for in chat, through the normal door.

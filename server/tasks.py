@@ -169,3 +169,48 @@ class Tasks:
                 bits.append("never worked on (with proof)")
             lines.append(f"  #{r['id']} {r['title']} — {', '.join(bits)}")
         return "\n".join(lines)
+
+
+TERMS_SCHEMA = """
+-- His own shorthand. "рнкп" means nothing to the photo checker, which then
+-- rejects a perfectly good photo of the presentation it stands for.
+CREATE TABLE IF NOT EXISTS terms (
+    term       TEXT PRIMARY KEY,        -- lowercase
+    meaning    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+class Terms:
+    def __init__(self, db):
+        self.db = db
+        db.conn.executescript(TERMS_SCHEMA)
+        db.conn.commit()
+
+    def set(self, term: str, meaning: str, now: datetime) -> bool:
+        term, meaning = (term or "").strip().lower(), (meaning or "").strip()
+        if not term or not meaning or len(term) > 40:
+            return False
+        self.db.run("INSERT INTO terms (term, meaning, updated_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(term) DO UPDATE SET meaning = excluded.meaning,"
+                    " updated_at = excluded.updated_at",
+                    (term, meaning[:200], now.isoformat()))
+        return True
+
+    def all(self) -> list:
+        return self.db.q("SELECT * FROM terms ORDER BY term")
+
+    def found_in(self, label: str) -> list:
+        import re
+        low = (label or "").lower()
+        return [r for r in self.all()
+                if re.search(r"(?<!\w)" + re.escape(r["term"]) + r"(?!\w)", low)]
+
+    def expand(self, label: str) -> str:
+        """The label as the photo checker should read it."""
+        hits = self.found_in(label)
+        if not hits:
+            return label
+        return label + " (" + "; ".join(f'"{r["term"]}" means {r["meaning"]}'
+                                        for r in hits) + ")"
