@@ -76,6 +76,7 @@ def make(now=None, **friend):
                      "brief_minutes_before": 20, "stale_days": 4, "due_soon_days": 7,
                      "rewrite_min_lost": 10, **friend}
     raw["coach"] = {"enabled": True, "max_calls_per_day": 50}
+    raw["standup"] = {"enabled": False}      # its own file covers the 20-min check
     cfg, db, led, eng, lk = build(raw, now=now or N(17, 0))
     bot = LockstepBot(cfg, db, led, eng, lk, StubValidator())
     bot.app = types.SimpleNamespace(bot=FakeBot())

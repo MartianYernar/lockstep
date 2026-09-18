@@ -62,6 +62,13 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   text or a photo and the friend accepts. Work-for-work swaps pass freely. If
   the model is unreachable, a full-sentence reason is taken on trust and logged.
   Every attempt, accepted or not, goes in the ledger as `rewrite_reason`.
+- **The 20-minute check.** `server/standup.py` asks three questions on the
+  20-minute marks inside a block: the precise thing he is on, whether he is
+  moving or drifting, what is in the way. Text answers, stored per block, fed
+  back into Friday's context so it can see three checks in a row saying the
+  same thing. Skipped while a photo is owed -- the siren is enough -- and in
+  `standup.skip_categories`. It replaced the older mid-block "how's it going"
+  check-in (`friend.checkins_per_day` is 0).
 - **No passwords anywhere.** The guardian is a Telegram chat id. Passwords get
   forgotten; this project already lost one that way.
 - **Stopping is a delay, not a wall.** `/stopbot` schedules it 24 hours out.

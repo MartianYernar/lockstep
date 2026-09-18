@@ -134,6 +134,8 @@ class Coach:
         self.terms = Terms(db)
         from .foundations import Foundations
         self.foundations = Foundations(db, cfg)
+        from .standup import Standups
+        self.standups = Standups(db, cfg)
         self.last_recheck: str | None = None
         self.last_judge_was_reason = True
         self.last_latenight: str | None = None
@@ -247,6 +249,12 @@ class Coach:
         if terms:
             out.append("His shorthand: " + "; ".join(
                 f"{t['term']} = {t['meaning']}" for t in terms))
+
+        said = self.standups.describe(day)
+        if said:
+            out.append("What he said he was doing, at the 20-min checks "
+                       "(his own words -- compare them, notice drift):")
+            out.append(said)
 
         bed_night = self.engine.bed_night(now)
         if bed_night is not None:
@@ -672,3 +680,20 @@ def _parse_reply(raw: str) -> tuple[str, list]:
         return str(data), []
     acts = data.get("actions") or []
     return str(data.get("reply") or "").strip(), acts if isinstance(acts, list) else []
+
+
+STANDUP_NOTE = """NOTE: this message is his answer to the 20-minute check for the
+block "{label}", asked at {at}. The three questions were: what exactly he's
+doing, whether he's moving fast, and what he's stuck on.
+
+Judge the answer like a friend who can tell the difference:
+- If it's vague ("math", "working", "fine", "nothing") -- push back ONCE and
+  ask for the precise thing: which problem, which page, which slide. Don't
+  lecture, one line.
+- If he named something specific, say something short about it and leave him
+  alone. Don't ask more questions; he's working.
+- If he said he's stuck or drifting, ask for the smallest next move -- or name
+  one yourself if it's obvious -- in one sentence.
+- If he's been saying the same thing for two or three checks in a row, say so
+  plainly ("that's the third check on the same paragraph bro").
+Keep it to one or two sentences either way."""

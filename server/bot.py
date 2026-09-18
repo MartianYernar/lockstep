@@ -46,6 +46,7 @@ class LockstepBot:
         self.coach = Coach(cfg, db, engine)
         self.tasks = self.coach.tasks
         self.foundations = self.coach.foundations
+        self.standups = self.coach.standups
         try:
             self.coach.terms.seed(cfg.raw.get("terms"), cfg.now())
         except Exception as exc:                              # noqa: BLE001
@@ -168,6 +169,7 @@ class LockstepBot:
                 BotCommand("tasks", "your big tasks and deadlines"),
                 BotCommand("events", "meetings and events coming up"),
                 BotCommand("night", "tonight's basics: socks, clothes, teeth"),
+                BotCommand("standup", "what am I doing exactly, right now"),
                 BotCommand("plan", "write tomorrow's timetable"),
                 BotCommand("status", "system state and days left"),
                 BotCommand("more", "the task needs longer"),
@@ -1083,6 +1085,42 @@ class LockstepBot:
     # speaking first
     # ======================================================================
     # ======================================================================
+    # the 20-minute check
+    # ======================================================================
+    async def _standup_tick(self, now: datetime) -> None:
+        su = self.standups
+        if not su.enabled or not self.engine.in_window(now):
+            return
+        day, minute = now.date(), now.hour * 60 + now.minute
+        # Behind already means the siren is going and he owes a photo. Piling
+        # three questions on top of that is noise, not accountability.
+        if self.engine.debt_seconds(day, now) > 0:
+            return
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None or (blk["category"] or "").lower() in su.skip_categories():
+            return
+        every = su.every()
+        since = minute - blk["start_min"]
+        if since < every or since % every:
+            return
+        if su.count_asked(day) >= int(su.conf.get("max_per_day", 24)):
+            return
+        if not self.db.claim(f"standup:{day}:{minute}"):
+            return
+        n = su.ask(now, blk["label"])
+        await self.send_user(su.question(n))
+
+    async def cmd_standup(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        blk = next((b for b in self.db.blocks(now.date())
+                    if b["start_min"] <= now.hour * 60 + now.minute < b["end_min"]), None)
+        n = self.standups.ask(now, blk["label"] if blk else "")
+        await update.message.reply_text(self.standups.question(n))
+
+    # ======================================================================
     # the nightly basics
     # ======================================================================
     def _foundations_text(self, day: date, heading: str) -> str:
@@ -1154,6 +1192,11 @@ class LockstepBot:
             await self._foundations_tick(now)
         except Exception as exc:                              # noqa: BLE001
             log.warning("foundations tick failed: %s", exc)
+
+        try:
+            await self._standup_tick(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("standup tick failed: %s", exc)
 
         # before the window: what's on his plate
         at = self.cfg.enforce_start_for(day) - int(conf.get("brief_minutes_before", 20))
@@ -2104,7 +2147,14 @@ class LockstepBot:
             return
         await update.message.chat.send_action("typing")
         try:
-            out = await self.coach.reply(text, now, note=self._reject_note(now))
+            note = self._reject_note(now)
+            su = self.standups.pending(now) if self.standups.enabled else None
+            if su is not None and not note:
+                from .coach import STANDUP_NOTE
+                note = STANDUP_NOTE.format(label=su["label"] or "his block",
+                                           at=su["asked_at"][11:16])
+                self.standups.answer(su["id"], text, now)
+            out = await self.coach.reply(text, now, note=note)
         except Exception as exc:                              # noqa: BLE001
             log.warning("coach reply failed: %s", exc)
             busy = any(k in str(exc) for k in ("RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE"))
@@ -2626,6 +2676,10 @@ class LockstepBot:
                       for g in goals]
         else:
             lines.append("\n▫️ No goals were set for this day.")
+        if self.standups.enabled:
+            done, asked = self.standups.score(day)
+            if asked:
+                lines.append(f"20-min checks answered {done}/{asked}")
         if self.foundations.enabled:
             rows = self.foundations.for_day(day)
             hit = sum(1 for r in rows if r["done_at"])
@@ -2659,6 +2713,7 @@ class LockstepBot:
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
+            ("standup", self.cmd_standup),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),
