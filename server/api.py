@@ -147,7 +147,17 @@ def build_app(cfg, engine, ledger) -> web.Application:
         # by it. Floored at 3s: below that the tone has no room to finish and
         # it stops sounding like an alarm and starts sounding like a fault.
         repeats = max(1, int(st["alarm_repeats"]))
-        return web.Response(text=str(max(3, 60 // repeats)), content_type="text/plain")
+        gap_s = max(3, 60 // repeats)
+        # Every minute in which the server asks for noise goes on the record.
+        # 18 Sep 02:00 the siren ran for an hour and there was no way to tell
+        # afterwards whether the server had asked for it -- it had not, but
+        # proving that took a database download and a replay. Now the ledger
+        # says, so a 2am siren is one query away from an answer.
+        if engine.db.claim(f"siren_told:{now:%Y-%m-%dT%H:%M}"):
+            ledger.append("siren_told", {"gap_sec": gap_s,
+                                         "why": st.get("headline", "")[:80],
+                                         "debt_min": st.get("debt_minutes", 0)})
+        return web.Response(text=str(gap_s), content_type="text/plain")
 
     app.router.add_get("/health", health)
     app.router.add_get("/agent/state", state)
