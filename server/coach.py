@@ -543,6 +543,48 @@ class Coach:
             SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
             [CHECKIN.format(label=block["label"])], now, max_tokens=120)
 
+    async def say(self, job: str, facts: str, now: datetime,
+                  max_tokens: int = 120) -> str:
+        """One short message, in his voice, carrying these facts.
+
+        The bot used to send fixed strings for this -- "your phone hasn't
+        checked in for 1065 min, press Start on both flows" -- and they read
+        like a machine because they were one. The facts are the same either
+        way; who says them is the difference. Every caller keeps a written
+        fallback for when there is no allowance left or the model is down.
+        """
+        return await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
+
+    async def say(self, job: str, facts: str, now: datetime,
+                  max_tokens: int = 120) -> str:
+        """One short message, in his voice, carrying these facts.
+
+        The bot used to send fixed strings for this -- "your phone hasn't
+        checked in for 1065 min, press Start on both flows" -- and they read
+        like a machine because they were one. The facts are the same either
+        way; who says them is the difference. Every caller keeps a written
+        fallback for when there is no allowance left or the model is down.
+        """
+        return await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
+
+    async def say(self, job: str, facts: str, now: datetime,
+                  max_tokens: int = 120) -> str:
+        """One short message, in his voice, carrying these facts.
+
+        The bot used to send fixed strings for this -- "your phone hasn't
+        checked in for 1065 min, press Start on both flows" -- and they read
+        like a machine because they were one. The facts are the same either
+        way; who says them is the difference. Every caller keeps a written
+        fallback for when there is no allowance left or the model is down.
+        """
+        return await self._ask(
+            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
+            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
+
     async def brief(self, now: datetime) -> str:
         """Before the window opens: what's on his plate, in a couple of lines."""
         return await self._ask(
@@ -697,3 +739,45 @@ Judge the answer like a friend who can tell the difference:
 - If he's been saying the same thing for two or three checks in a row, say so
   plainly ("that's the third check on the same paragraph bro").
 Keep it to one or two sentences either way."""
+
+
+SAY = """Text him now about this. You are starting the conversation, he has not
+just written to you.
+
+WHAT THIS IS ABOUT: {job}
+
+THE FACTS -- all true, use what matters and drop the rest:
+{facts}
+
+One or two short lines, the way you actually text. No lists, no headings, no
+sign-off. Keep every number and name that matters (the block, the minutes, the
+app to open) -- he has to know what to do. Don't invent anything that isn't in
+the facts, and don't promise to change anything."""
+
+
+SAY = """Text him now about this. You are starting the conversation, he has not
+just written to you.
+
+WHAT THIS IS ABOUT: {job}
+
+THE FACTS -- all true, use what matters and drop the rest:
+{facts}
+
+One or two short lines, the way you actually text. No lists, no headings, no
+sign-off. Keep every number and name that matters (the block, the minutes, the
+app to open) -- he has to know what to do. Don't invent anything that isn't in
+the facts, and don't promise to change anything."""
+
+
+SAY = """Text him now about this. You are starting the conversation, he has not
+just written to you.
+
+WHAT THIS IS ABOUT: {job}
+
+THE FACTS -- all true, use what matters and drop the rest:
+{facts}
+
+One or two short lines, the way you actually text. No lists, no headings, no
+sign-off. Keep every number and name that matters (the block, the minutes, the
+app to open) -- he has to know what to do. Don't invent anything that isn't in
+the facts, and don't promise to change anything."""

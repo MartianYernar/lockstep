@@ -1181,6 +1181,25 @@ class LockstepBot:
             self._foundations_text(day, "end of day basics 🧦🦷"), parse_mode=ParseMode.HTML,
             reply_markup=self._foundations_buttons(day))
 
+    async def _human(self, job: str, facts: str, fallback: str,
+                     now: datetime | None = None) -> str:
+        """Let Friday word it. The written line is what goes out if it can't.
+
+        Chat is protected: these never eat the last of the day's allowance,
+        because being answered when he writes matters more than the phrasing
+        of a nag.
+        """
+        now = now or self.cfg.now()
+        reserve = int(self.coach.conf.get("say_reserve", 30))
+        if not self.coach.enabled or self.coach.budget_left(now.date()) <= reserve:
+            return fallback
+        try:
+            said = await self.coach.say(job, facts, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("could not word it: %s", exc)
+            return fallback
+        return said.strip() or fallback
+
     async def _friend_tick(self, now: datetime) -> None:
         conf = self.cfg.raw.get("friend", {}) or {}
         if not conf.get("enabled", True) or not self.lock.enabled:
@@ -2457,10 +2476,15 @@ class LockstepBot:
         st = self.engine.agent_state(now)
         if st.active and st.level > self.last_level:
             self.last_level = st.level
-            await self.send_user(
-                f"🔺 <b>bro, {st.debt_minutes} minutes behind.</b> {html.escape(st.headline)}\n"
-                f"{html.escape(st.detail)}\n\n"
-                f"siren's going {st.alarm_repeats}× a minute now. send the pic and it stops.")
+            await self.send_user(await self._human(
+                "he has fallen further behind, so the siren just got more frequent",
+                f"minutes behind: {st.debt_minutes}\n"
+                f"what is owed: {st.headline}\n{st.detail}\n"
+                f"the siren now sounds {st.alarm_repeats} times a minute\n"
+                "it stops the moment a valid photo lands\n",
+                f"🔺 bro, {st.debt_minutes} minutes behind. {html.escape(st.headline)}\n"
+                f"siren's going {st.alarm_repeats}× a minute now, send the pic and it stops.",
+                now))
         elif not st.active:
             self.last_level = 0
 
@@ -2567,6 +2591,21 @@ class LockstepBot:
                 ])
             if kind == "activity" and cid % 3 == 0:
                 body += "\n(no face or logins in it)"
+            shot = ("a screenshot of " + blocker + " running, with the taskbar clock in it"
+                    if kind.startswith("blocker") else
+                    "a photo of his bed, opened, ready to sleep in" if kind == "bed" else
+                    "a photo of him actually doing it, with a clock or timestamp in shot")
+            body = await self._human(
+                "asking him for the proof photo for a block that is starting now"
+                if starting else
+                "checking in mid-block: the next proof photo is due now",
+                f"block: {p['label']}\ndue at: {due:%H:%M}\nhe must send: {shot}\n"
+                f"he has {grace} minutes before it counts as missed\n"
+                + ("this is the start of the block\n" if starting
+                   else "he is already in this block, this is a later check\n")
+                + ("no face, no logins, nothing showing where he lives\n"
+                   if kind == "activity" else ""),
+                body)
             await self.send_user(body)
             self.ledger.append("checkpoint_asked",
                                {"checkpoint": p["checkpoint_id"], "kind": kind})
@@ -2585,7 +2624,15 @@ class LockstepBot:
             when = ("siren's on now, send it and it stops 🔊"
                     if wait <= 0 else
                     f"siren starts in {wait} min if it doesn't come")
-            await self.send_user(f"{prefix} for {what}? {when}")
+            await self.send_user(await self._human(
+                "his time ran out and the photo never came -- the siren is on now"
+                if wait <= 0 else "his time ran out and the photo never came",
+                f"block{'s' if n > 1 else ''}: {what}\n"
+                f"missed checks: {n}\n"
+                + ("the phone siren is sounding right now and stops the moment a "
+                   "valid photo lands\n" if wait <= 0 else
+                   f"the siren starts in {wait} minutes unless the photo lands first\n"),
+                f"{prefix} for {what}? {when}", now))
             self.ledger.append("checkpoint_overdue",
                                {"checkpoint": p["checkpoint_id"], "count": n})
 
@@ -2598,21 +2645,33 @@ class LockstepBot:
                 f"{p['excused']} checkpoints voided. Not his doing.")
 
         elif act.kind == "phone_silent":
-            await self.send_user(
-                f"📵 <b>your phone hasn't checked in for {p['minutes']} min</b>, so the siren "
-                "is dead rn.\n\n"
-                f"Open <b>{self.cfg.esc.get('agent_app', 'Automate')}</b>, press Start on "
-                "both flows 🙏")
+            app = self.cfg.esc.get("agent_app", "Automate")
+            hours = int(p["minutes"]) // 60
+            await self.send_user(await self._human(
+                "his phone stopped checking in, so the siren can't sound at all "
+                "-- he needs to open the app and start the flows again",
+                f"silent for: {p['minutes']} minutes"
+                + (f" (about {hours} hours)\n" if hours else "\n")
+                + f"app to open: {app}\n"
+                "what to do: open it and press Start on both flows\n"
+                "checkpoints and photos carry on either way -- only the siren is dead\n",
+                f"📵 phone's been quiet {p['minutes']} min so the siren's dead. "
+                f"open {app} and hit Start on both flows 🙏", now))
             if p.get("escalate"):
                 await self.send_guardian(
                     f"📵 {self.cfg.user_name}'s phone has been silent {p['minutes']} min "
                     "inside the window. Flat battery, a crash — or switched off.")
 
         elif act.kind == "bed_overdue":
-            await self.send_user(
-                f"🛏 <b>bro it's {p['minutes']} min past bedtime.</b> send a pic of your "
-                "bed, opened, and the siren stops.\n\n"
-                "actually out or on a deadline? <code>/latenight reason</code>")
+            await self.send_user(await self._human(
+                "it is past his bedtime and the siren wants a photo of his bed",
+                f"minutes past bedtime: {p['minutes']}\n"
+                "he must send: a photo of his bed, opened, ready to sleep in\n"
+                "the siren stops when it lands\n"
+                "if he is genuinely out or on a real deadline he can send "
+                "/latenight <reason> for two more hours, once a week\n",
+                f"🛏 bro it's {p['minutes']} min past bedtime. send a pic of your bed, "
+                "opened, and the siren stops.", now))
 
         elif act.kind == "bed_missed":
             await self.send_user(
@@ -2628,9 +2687,13 @@ class LockstepBot:
                 "siren runs till you send one. " + PLAN_HELP)
 
         elif act.kind == "plan_nag":
-            await self.send_user(
-                f"🗓 yo, plan for <b>{p['date']}</b> isn't written yet. "
-                f"need it by {self.cfg.plan_due:%H:%M} — /plan")
+            await self.send_user(await self._human(
+                "tomorrow's plan still isn't written and the deadline for it is coming",
+                f"the plan is for: {p['date']}\n"
+                f"due by: {self.cfg.plan_due:%H:%M} tonight\n"
+                "he writes it with /plan, one block per line\n",
+                f"🗓 yo, plan for {p['date']} isn't written yet. "
+                f"need it by {self.cfg.plan_due:%H:%M} — /plan", now))
 
         elif act.kind == "daily_report":
             keep = int(self.cfg.raw.get("privacy", {}).get("retain_days", 7))
