@@ -199,7 +199,9 @@ out = run(bot.coach.reply("stuff", N(17, 0)))
 check("no events saved", db.one("SELECT COUNT(*) c FROM reminders")["c"], 0)
 check("no past deadline", bot.tasks.find("physics ia")["due"], None)
 check("no duplicate task", len(bot.tasks.open()), 4)
-check("nothing claimed as saved", "📌" in out, False)
+check("nothing bad was written", "📌 new task" in out or "📌 event saved" in out, False)
+check("the one he already had is named, not dropped", "already had" in out, True)
+check("and every refusal is reported back, never silent", out.count("⚠️") >= 6, True)
 check("plain text from the model still works",
       __import__("server.coach", fromlist=["x"])._parse_reply("just words"), ("just words", []))
 

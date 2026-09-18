@@ -453,63 +453,113 @@ class Coach:
         return say
 
     def apply(self, actions: list, now: datetime) -> list[str]:
-        """Carry out what the model asked for. Returns what was actually saved."""
+        """Carry out what the model asked for, and account for every one.
+
+        18 Sep he sent a numbered list of sixteen things. Two of them --
+        "Physics IA submit by 20/09" and "CAS mandatory project" -- matched
+        tasks he already had, so the duplicate guard skipped them without a
+        word, and the 20 Sep deadline went with them. A silent skip on a list
+        of deadlines is the worst failure this thing can have: he believes it
+        was saved.
+
+        So nothing returns silently now. Every action produces a line: saved,
+        merged into one he already had, or refused with the reason.
+        """
         done: list[str] = []
         for a in actions or []:
             if not isinstance(a, dict):
+                done.append("⚠️ couldn't read one of the items you sent — say it again?")
                 continue
             kind = (a.get("type") or "").strip()
             try:
                 if kind == "add_task":
                     title = (a.get("title") or "").strip()
-                    if not title or self.tasks.find(title):
+                    if not title:
+                        done.append("⚠️ one item had no name — what was it?")
                         continue
                     due = _date(a.get("date"))
+                    have = self.tasks.find(title)
+                    if have is not None:
+                        # Already on the list. Keep the one he has, but never
+                        # lose what he just told us about it.
+                        extra = ""
+                        if due and have["due"] != due.isoformat():
+                            if self.tasks.set_due(have["id"], due):
+                                extra = f", deadline set to {due:%a %d %b}"
+                        done.append(f"already had #{have['id']} {have['title']}{extra}")
+                        continue
                     tid = self.tasks.add(title, now, due=due)
                     done.append(f"new task #{tid}: {title}"
                                 + (f" (due {due:%d %b})" if due else ""))
                 elif kind in ("complete_task", "set_due", "add_note"):
-                    t = self.tasks.find((a.get("task") or "").lstrip("#"))
+                    who = (a.get("task") or "").strip()
+                    t = self.tasks.find(who.lstrip("#"))
                     if t is None:
+                        done.append(f"⚠️ couldn't find a task called \"{who}\" — which one?")
                         continue
                     if kind == "complete_task":
                         if self.tasks.close(t["id"], now):
                             done.append(f"done: {t['title']} ✅")
+                        else:
+                            done.append(f"{t['title']} was already closed")
                     elif kind == "set_due":
                         due = _date(a.get("date"))
-                        if due and due >= now.date() and self.tasks.set_due(t["id"], due):
+                        if due is None:
+                            done.append(f"⚠️ couldn't read the date for {t['title']} — when is it?")
+                        elif due < now.date():
+                            done.append(f"⚠️ {due:%d %b} is in the past, so I left "
+                                        f"{t['title']} alone")
+                        elif self.tasks.set_due(t["id"], due):
                             done.append(f"{t['title']} due {due:%a %d %b}")
                     else:
                         note = (a.get("text") or "").strip()
                         if note and self.tasks.note(t["id"], note):
                             done.append(f"noted on {t['title']}")
+                        else:
+                            done.append(f"⚠️ nothing to note on {t['title']}")
                 elif kind == "tick_basic":
                     night = self.foundations.night_of(now)
                     row = self.foundations.find(night, a.get("text") or a.get("title") or "")
-                    if row and self.foundations.tick(night, row["idx"], now):
+                    if row is None:
+                        done.append("⚠️ which of tonight's basics did you mean?")
+                    elif self.foundations.tick(night, row["idx"], now):
                         done.append(f"ticked: {row['text']} ✅")
+                    else:
+                        done.append(f"{row['text']} was already ticked")
                 elif kind == "define":
                     term = (a.get("title") or a.get("task") or "").strip()
                     if self.terms.set(term, a.get("text") or "", now):
                         done.append(f"got it: {term.lower()} = {(a.get('text') or '').strip()}")
+                    else:
+                        done.append(f"⚠️ couldn't save what \"{term}\" means")
                 elif kind == "add_event":
                     what = (a.get("text") or a.get("title") or "").strip()
                     d, hm = _date(a.get("date")), (a.get("time") or "").strip()
-                    if not (what and d and ":" in hm):
+                    if not what:
+                        done.append("⚠️ an event came through with no name")
+                        continue
+                    if not d or ":" not in hm:
+                        done.append(f"⚠️ didn't catch when \"{what}\" is — date and time?")
                         continue
                     hh, mi = (int(x) for x in hm.split(":")[:2])
                     when = datetime.combine(d, datetime.min.time(),
                                             tzinfo=now.tzinfo).replace(hour=hh, minute=mi)
                     if when <= now:
+                        done.append(f"⚠️ \"{what}\" reads as {when:%d %b %H:%M}, already past "
+                                    "— when is it really?")
                         continue
                     if self.db.one("SELECT 1 FROM reminders WHERE at_ts = ? AND text = ?",
                                    (when.isoformat(), what)):
+                        done.append(f"already had {what} — {when:%a %d %b %H:%M}")
                         continue
                     self.db.run("INSERT INTO reminders (at_ts, text, created_at)"
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
+                elif kind not in ("edit_plan", "recheck_photo", "start_latenight"):
+                    done.append(f"⚠️ didn't know what to do with \"{kind}\"")
             except (ValueError, TypeError) as exc:
-                log.warning("coach action %s skipped: %s", kind, exc)
+                log.warning("coach action %s failed: %s", kind, exc)
+                done.append(f"⚠️ couldn't save one of those ({kind}) — say it again?")
         return done
 
     # -- holding the line on a replan ----------------------------------------
@@ -630,6 +680,10 @@ actually told you, never guessed:
   Only do this when he actually asks for a change. Don't say it's done in your reply
   -- the app confirms it, and if the change cuts work time it will ask him why.
 Work out dates like "thursday" from "Right now" above. Usually actions is [].
+When he sends a LIST, emit ONE action per item -- every single line, in order,
+including sub-items like "6.1". Never merge two items, never leave one out
+because it looks similar to something he already has: the app decides that and
+tells him. A dropped line is the worst thing you can do to him.
 Don't repeat in the reply what you saved -- the app shows that itself.
 If a big task has no deadline, you can ask when it's due, once in a while."""
 

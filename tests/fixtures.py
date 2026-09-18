@@ -54,8 +54,14 @@ def build(raw=None, now=None):
 
     tmp = tempfile.mkdtemp()
     cpath = os.path.join(tmp, "config.yaml")
+    raw = raw or RAW
+    # A test that reaches the real API is a test that fails on a plane, and it
+    # spends his quota. Unless a test says otherwise, the whole daily allowance
+    # is held in reserve, so the bot words its nags from the written lines and
+    # never calls out.
+    raw.setdefault("coach", {}).setdefault("say_reserve", 10_000)
     with open(cpath, "w") as fh:
-        yaml.safe_dump(raw or RAW, fh)
+        yaml.safe_dump(raw, fh)
     cfg = Config.load(cpath)
     fixed = now or PINNED
     cfg.now = lambda: fixed

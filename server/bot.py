@@ -5,6 +5,7 @@ import html
 import logging
 import os
 import pathlib
+import re
 from datetime import date, datetime, timedelta
 
 from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton,
@@ -2208,6 +2209,11 @@ class LockstepBot:
             return
         if prepared is not None:
             await self._apply_chat_plan(update, prepared)
+        # Last word, after whatever he was told: anything from a list that
+        # does not look like it landed.
+        missed = self._unsaved_lines(text, out)
+        if missed:
+            await update.message.reply_text(missed, parse_mode=ParseMode.HTML)
 
     def _prepare_chat_plan(self, edit: dict, now: datetime):
         """Turn a chat edit into (path, day, plan text), or a message to send.
@@ -2351,6 +2357,44 @@ class LockstepBot:
         cp = self.engine.current_checkpoint(now.date(), now)
         await update.message.reply_text("ok my bad, that makes sense 👍")
         await self._count_photo(update, cp, r["blob"], verdict, now)
+
+    # "1. thing", "2) thing", and "6.1 thing" -- he writes sub-items without
+    # the trailing dot, and that is exactly the shape that went missing.
+    LIST_LINE = re.compile(r"^\s*(\d+(?:\.\d+)+|\d+[.)])\s*(.+)$")
+
+    def _unsaved_lines(self, text: str, reply: str) -> str:
+        """Check a numbered list line by line against what came back.
+
+        He sent sixteen numbered things and two never landed. Trusting the
+        model to account for its own output is exactly the wrong place to
+        trust it, so the lines are counted here, in code, and anything without
+        an obvious match is put in front of him.
+        """
+        lines = [(m.group(1), m.group(2).strip())
+                 for m in (self.LIST_LINE.match(l) for l in (text or "").splitlines()) if m]
+        if len(lines) < 3:
+            return ""
+        low = (reply or "").lower()
+
+        # Short words carry the meaning here -- "DS HL IA" is the whole item --
+        # so nothing is dropped for being brief, only for being filler. Numbers
+        # are ignored: "19/09/2026" comes back as "19 Sep" and would never match.
+        stop = {"the", "and", "for", "with", "on", "by", "of", "to", "in", "at",
+                "is", "an", "a", "my", "it", "as"}
+
+        def covered(item: str) -> bool:
+            words = [w for w in re.findall(r"[^\W\d_]{2,}", item.lower())
+                     if w not in stop]
+            if not words:
+                return True
+            hit = sum(1 for w in words if w in low)
+            return hit >= max(1, (len(words) + 1) // 2)
+
+        missed = [f"{n}. {html.escape(item)}" for n, item in lines if not covered(item)]
+        if not missed:
+            return ""
+        return ("⚠️ I'm not sure these landed — send them again or say "
+                "<code>/task add ...</code>:\n" + "\n".join(missed))
 
     async def _apply_chat_plan(self, update: Update, prepared) -> None:
         """A schedule change he asked for in chat, through the normal door.
