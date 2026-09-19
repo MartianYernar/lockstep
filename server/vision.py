@@ -198,9 +198,18 @@ face_visible - true if any human face is identifiable in the frame, theirs or
 identity_visible - true if any name, username, login, email address, account
   name or profile photo is readable anywhere, including in browser tabs,
   window titles, sidebars and notification banners.
-location_revealing - true if the background could place them: a window with a
-  view out, buildings, a street, a recognisable landmark, house numbers,
-  signage. An interior wall, floor, desk or ceiling is false.
+location_revealing - true only if a STRANGER COULD FIND HIM from this frame
+  alone: a readable street name or house number, the name or logo of his
+  school or block of flats, a shop sign carrying a branch address, a map or
+  delivery app on screen showing his address, an envelope or parcel with an
+  address on it, or a landmark distinctive enough to name the neighbourhood.
+  An ordinary outdoor scene is FALSE and must be allowed: a playground, a
+  path, tarmac, grass, trees, a park, anonymous flats with nothing readable,
+  a gym, a bus, parked cars, a courtyard, a stairwell. He is asked for photos
+  outdoors -- workouts, walks, the podyezd -- so refusing every outdoor frame
+  makes those impossible to answer, which costs him far more than the vague
+  risk that somebody recognises a paving slab.
+  If you would have to guess where this is, it is false.
 privacy_detail - one sentence naming what would need to move out of frame.
   "" if nothing.
 """
@@ -472,14 +481,26 @@ class Validator:
                 leaks.append("a face")
             if base["identity_visible"] and priv.get("no_identity", True):
                 leaks.append("your name or login")
-            if base["location_revealing"] and priv.get("no_location", True):
-                leaks.append("something that shows where you are")
+            located = base["location_revealing"] and priv.get("no_location", True)
+            if located:
+                leaks.append("something that could place you")
             if leaks:
+                # A face or a login is not arguable. A place might be: the
+                # checker called a playground of white poles and red tarmac
+                # "location-revealing" on 19 Sep, and there is no way to
+                # photograph a workout outdoors if that stands. So a
+                # location-only refusal carries its own code, and the bot
+                # lets him say what it actually is.
+                only_place = located and len(leaks) == 1
                 return Verdict(
-                    ok=False, failure_code="privacy",
+                    ok=False,
+                    failure_code="privacy_location" if only_place else "privacy",
                     reason=f"Not counted — this shows {', '.join(leaks)}. "
-                           f"{base['privacy_detail']} Reframe and send it again. "
-                           "(Your rule, not mine.)", **base)
+                           f"{base['privacy_detail']} "
+                           + ("Reframe it, or tell me what's actually in shot and "
+                              "I'll look again." if only_place else
+                              "Reframe and send it again. (Your rule, not mine.)"),
+                    **base)
 
         if base["replay_suspected"]:
             return Verdict(ok=False, failure_code="replay",

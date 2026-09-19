@@ -2211,9 +2211,11 @@ class LockstepBot:
             # a strange way to respect the rule.
             self.ledger.append("photo_rejected",
                                {"checkpoint": cp["id"], "code": verdict.failure_code})
-            # Only a "that's not the task" rejection can be fixed by explaining.
-            # A missing clock or a face in frame can't be talked around.
-            explainable = verdict.failure_code == "mismatch"
+            # A wrong read can be explained; a missing clock cannot. A face or
+            # a login is never negotiable -- but "this could place you" is a
+            # judgement about an ordinary street, and he is the one who knows
+            # whether the poles behind him name his address.
+            explainable = verdict.failure_code in ("mismatch", "privacy_location")
             self.last_reject = ({"cp": cp["id"], "blob": blob, "mime": mime, "at": now,
                                  "label": label, "category": category,
                                  "kind": cp["kind"] or "activity",
