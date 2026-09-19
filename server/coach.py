@@ -139,6 +139,7 @@ class Coach:
         self.last_recheck: str | None = None
         self.last_judge_was_reason = True
         self.last_latenight: str | None = None
+        self.last_make_plan: dict | None = None
 
     # -- config ---------------------------------------------------------------
     @property
@@ -272,6 +273,12 @@ class Coach:
         big = self.tasks.describe(day)
         out.append("His big tasks (the long-running ones):")
         out.append(big or "  none saved.")
+        if getattr(self, "agenda", None) is not None:
+            risk = self.agenda.at_risk(day)
+            if risk:
+                out.append("Deadlines that do not currently fit in the time left:")
+                for r in risk[:4]:
+                    out.append("  " + self.agenda.line(r))
 
         events = self.db.q(
             "SELECT at_ts, text FROM reminders WHERE at_ts >= ? AND at_ts < ?"
@@ -441,6 +448,8 @@ class Coach:
         self.last_plan_edits = [a for a in actions
                                 if isinstance(a, dict) and a.get("type") == "edit_plan"
                                 and (a.get("plan") or "").strip()]
+        mp = [a for a in actions if isinstance(a, dict) and a.get("type") == "make_plan"]
+        self.last_make_plan = mp[0] if mp else None
         ln = [a for a in actions if isinstance(a, dict) and a.get("type") == "start_latenight"]
         self.last_latenight = (ln[0].get("text") or "").strip() if ln else None
         rc = [a for a in actions if isinstance(a, dict) and a.get("type") == "recheck_photo"]
@@ -555,7 +564,8 @@ class Coach:
                     self.db.run("INSERT INTO reminders (at_ts, text, created_at)"
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
-                elif kind not in ("edit_plan", "recheck_photo", "start_latenight"):
+                elif kind not in ("edit_plan", "recheck_photo", "start_latenight",
+                                  "make_plan"):
                     done.append(f"⚠️ didn't know what to do with \"{kind}\"")
             except (ValueError, TypeError) as exc:
                 log.warning("coach action %s failed: %s", kind, exc)
@@ -669,6 +679,11 @@ actually told you, never guessed:
   his last photo was rejected and he's explaining what it shows or what the
   task means. The app re-checks the same photo with his explanation. You don't
   decide -- never say it counts. Use define too if he explained a shorthand.
+- {"type":"make_plan","day":"today"/"tomorrow"/"YYYY-MM-DD","days":1,"text":"..."}
+  when he asks YOU to build the plan ("plan my day", "plan the next 2 days",
+  "rest plan yourself"). Put whatever he fixed in "text", word for word, and
+  the app builds the rest around his deadlines. Use days:2 or 3 if he asked
+  for more than one day. Don't write the blocks yourself in this case.
 - {"type":"edit_plan","day":"today" or "tomorrow","plan":"HH:MM-HH:MM label\n..."}
   when he asks you to change his schedule. Write the WHOLE new plan, one block
   per line: for today, from the block he's in now to the end of the window;
@@ -697,7 +712,8 @@ REPLY_SCHEMA = {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
                     "edit_plan", "define", "recheck_photo", "tick_basic",
-                    "start_latenight"]},
+                    "start_latenight", "make_plan"]},
+                "days": {"type": "INTEGER"},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
                 "text": {"type": "STRING"}, "date": {"type": "STRING"},

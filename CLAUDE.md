@@ -69,6 +69,18 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   same thing. Skipped while a photo is owed -- the siren is enough -- and in
   `standup.skip_categories`. It replaced the older mid-block "how's it going"
   check-in (`friend.checkins_per_day` is 0).
+- **The day is built, not only typed.** `server/dayplan.py` turns how he
+  actually writes -- three blocks on one line, four time formats, "rest plan do
+  yourself" -- into the strict block list, and fills the free hours from
+  `server/agenda.py`: hours still needed per task against hours of window left
+  before each deadline. A built plan is proposed with a button, never written
+  silently, and it goes through the same coverage check and the same rewrite
+  guard as a typed one. Two attempts, the second one quoting the rejection.
+- **Hours done means hours proven.** `Agenda.hours_done` counts satisfied
+  checkpoints inside blocks matching a task, one proof interval each, capped at
+  the block. Planning a block buys nothing. That number is what `/forecast`,
+  the Sunday review and the planner's priorities all run on, so if you change
+  how proof works, change it there too.
 - **No passwords anywhere.** The guardian is a Telegram chat id. Passwords get
   forgotten; this project already lost one that way.
 - **Stopping is a delay, not a wall.** `/stopbot` schedules it 24 hours out.

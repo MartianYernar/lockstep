@@ -384,10 +384,10 @@ u = FakeUpdate("add eat 18:00-18:20")
 run(bot.on_text(u, None))
 check("the friend's words go first", u.message.replies[0], "bet")
 check("then the plan is changed", labels(db),
-      ["work: physics IA", "work: physics IA", "eat", "gym", "work: uni essay"])
-check("the minutes before the change stay what they were",
-      [(b["start_min"], b["end_min"]) for b in db.blocks(DAY)][:3],
-      [(960, 1076), (1076, 1080), (1080, 1100)])
+      ["work: physics IA", "eat", "gym", "work: uni essay"])
+check("the block he was in is not sliced into slivers -- it stays one block",
+      [(b["start_min"], b["end_min"]) for b in db.blocks(DAY)][:2],
+      [(960, 1080), (1080, 1100)])
 check("and it confirms", "rest of today" in u.message.last, True)
 check("nothing is left pending", bot.coach.last_plan_edits, [])
 

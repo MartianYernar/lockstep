@@ -48,6 +48,11 @@ class LockstepBot:
         self.tasks = self.coach.tasks
         self.foundations = self.coach.foundations
         self.standups = self.coach.standups
+        from .agenda import Agenda
+        from .dayplan import DayPlanner
+        self.agenda = Agenda(db, cfg, self.tasks)
+        self.coach.agenda = self.agenda
+        self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda)
         try:
             self.coach.terms.seed(cfg.raw.get("terms"), cfg.now())
         except Exception as exc:                              # noqa: BLE001
@@ -171,6 +176,8 @@ class LockstepBot:
                 BotCommand("events", "meetings and events coming up"),
                 BotCommand("night", "tonight's basics: socks, clothes, teeth"),
                 BotCommand("standup", "what am I doing exactly, right now"),
+                BotCommand("plan2", "build the next 2 days for me"),
+                BotCommand("forecast", "will I make my deadlines?"),
                 BotCommand("plan", "write tomorrow's timetable"),
                 BotCommand("status", "system state and days left"),
                 BotCommand("more", "the task needs longer"),
@@ -208,6 +215,9 @@ class LockstepBot:
             return
         if q.data.startswith("basic:"):
             await self._on_basic_button(q)
+            return
+        if q.data.startswith("plan:"):
+            await self._on_plan_button(q)
             return
         if not q.data.startswith("done:"):
             return
@@ -697,6 +707,11 @@ class LockstepBot:
             blocks = planner.parse(text)
             planner.validate_coverage(blocks, start, end)
         except planner.PlanError as exc:
+            # Not an error -- an instruction. "From 13:50 till 14:20 lunch...
+            # Rest plan do yourself" is a plan; it just isn't in the shape the
+            # parser wants. Hand it to the one that can read it.
+            if await self._offer_built_plan(update, target, text, now, str(exc)):
+                return
             await update.message.reply_text(f"❌ {html.escape(str(exc))}",
                                             parse_mode=ParseMode.HTML)
             return
@@ -851,6 +866,148 @@ class LockstepBot:
         await self.send_guardian(
             f"📝 {self.cfg.user_name} rewrote the rest of today from "
             f"{minute//60:02d}:{minute%60:02d}. The day still ends at the same time.{why}")
+
+    # ======================================================================
+    # building the day for him
+    # ======================================================================
+    async def _offer_built_plan(self, update: Update, day: date, text: str,
+                                now: datetime, why: str = "") -> bool:
+        """Build a plan from what he wrote and offer it. True if we handled it."""
+        if not self.coach.enabled or self.coach.budget_left(now.date()) <= 0:
+            return False
+        await update.message.chat.send_action("typing")
+        try:
+            blocks, note = await self.dayplanner.build(day, text, now)
+        except planner.PlanError as exc:
+            log.info("could not build a plan: %s", exc)
+            return False
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("dayplan failed: %s", exc)
+            return False
+        rendered = "\n".join(f"{b.hhmm()} {b.label}" for b in blocks)
+        self.pending[update.effective_chat.id] = {
+            "action": "plan_proposal", "date": day, "text": rendered}
+        when = "today" if day == now.date() else (
+            "tomorrow" if day == now.date() + timedelta(days=1) else f"{day:%a %d %b}")
+        await update.message.reply_text(
+            f"here's {when}:\n\n{planner.render(blocks)}"
+            + (f"\n\n{html.escape(note)}" if note else "")
+            + "\n\nlock it in?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ lock it", callback_data="plan:ok"),
+                InlineKeyboardButton("🔁 redo", callback_data="plan:redo")]]))
+        return True
+
+    async def _chat_make_plan(self, update: Update, want: dict, now: datetime) -> None:
+        """He asked Friday to build it. One day is offered; several are locked in."""
+        raw_day = str(want.get("day") or "tomorrow").strip().lower()
+        if raw_day.startswith("tod"):
+            day = now.date()
+        elif raw_day.startswith("tom"):
+            day = now.date() + timedelta(days=1)
+        else:
+            try:
+                day = date.fromisoformat(raw_day[:10])
+            except ValueError:
+                day = self.target_plan_date(now)
+        days = max(1, min(int(want.get("days") or 1), 3))
+        text = str(want.get("text") or "")
+        if days == 1:
+            if not await self._offer_built_plan(update, day, text, now):
+                await update.message.reply_text(
+                    "couldn't build that one — send it as blocks and I'll lock it in.")
+            return
+        for i in range(days):
+            d = day + timedelta(days=i)
+            if not self.db.goals(d):
+                self.pending[update.effective_chat.id] = {"action": "goals", "date": d}
+                await update.message.reply_text(
+                    f"goals for {d:%a %d %b} first — the 3-5 things it's for?")
+                return
+            try:
+                blocks, _note = await self.dayplanner.build(d, text if i == 0 else "", now)
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("chat multi-day plan failed on %s: %s", d, exc)
+                await update.message.reply_text(f"couldn't build {d:%a %d %b}.")
+                return
+            await self._accept_plan(update, d,
+                                    "\n".join(f"{b.hhmm()} {b.label}" for b in blocks))
+
+    async def _on_plan_button(self, q) -> None:
+        chat = q.message.chat.id if getattr(q, "message", None) else self.cfg.user_chat_id
+        pend = self.pending.get(chat) or {}
+        if pend.get("action") != "plan_proposal":
+            await q.edit_message_text("that plan's gone stale — send /plan again.")
+            return
+        now = self.cfg.now()
+        if q.data.endswith(":redo"):
+            self.pending.pop(chat, None)
+            await q.edit_message_text("ok, tell me what to change and I'll redo it.")
+            return
+        day, text = pend["date"], pend["text"]
+        self.pending.pop(chat, None)
+        await q.edit_message_text("locked in 🤝")
+        update = _Reply(q, chat)
+        await self._accept_plan(update, day, text)
+
+    async def cmd_plandays(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/plan2 -- the next two days at once, built around the deadlines."""
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        arg = update.message.text.partition(" ")[2].strip()
+        days = int(arg) if arg.isdigit() else 2
+        days = max(1, min(days, 3))
+        first = self.target_plan_date(now)
+        made = []
+        for i in range(days):
+            day = first + timedelta(days=i)
+            if not self.db.goals(day):
+                await update.message.reply_text(
+                    f"goals for {day:%a %d %b} first — what are the 3-5 things it's for?")
+                self.pending[update.effective_chat.id] = {"action": "goals", "date": day}
+                return
+            await update.message.chat.send_action("typing")
+            try:
+                blocks, note = await self.dayplanner.build(day, "", now)
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("multi-day plan failed on %s: %s", day, exc)
+                await update.message.reply_text(
+                    f"couldn't build {day:%a %d %b} — {html.escape(str(exc))}",
+                    parse_mode=ParseMode.HTML)
+                break
+            await self._accept_plan(update, day,
+                                    "\n".join(f"{b.hhmm()} {b.label}" for b in blocks))
+            made.append(day)
+        if len(made) > 1:
+            await update.message.reply_text(
+                f"that's {len(made)} days sorted. /forecast to see where the deadlines stand.")
+
+    async def cmd_forecast(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Hours left against hours available, per deadline."""
+        if not self._is_user(update):
+            return
+        today = self.cfg.now().date()
+        rows = self.agenda.all_status(today)
+        if not rows:
+            await update.message.reply_text("no big tasks saved yet. /tasks")
+            return
+        body = "\n".join(self.agenda.line(r) for r in rows[:12])
+        risk = [r for r in rows if r["verdict"] in ("OVERDUE", "WILL MISS")]
+        tail = ""
+        if risk:
+            r = risk[0]
+            tail = (f"\n\n<b>{html.escape(r['title'])}</b> is the one that doesn't fit: "
+                    f"{r['hours_left']:g}h left, about {r['available']:g}h of window "
+                    f"before {r['due']}.")
+        missing = [r for r in rows if r["verdict"] == "no estimate"]
+        if missing:
+            tail += ("\n\nno hour estimate on: "
+                     + ", ".join(html.escape(r["title"]) for r in missing[:4])
+                     + " — say <code>/task hours 3 20</code> or just tell me.")
+        await update.message.reply_text(
+            "<b>where the deadlines stand</b>\n" + body + tail, parse_mode=ParseMode.HTML)
 
     # ======================================================================
     # holding the line on a rewritten plan
@@ -1018,6 +1175,38 @@ class LockstepBot:
                     + ("" if due else "\n\nwhen's it due? <code>/task due "
                        f"{tid} 15 oct</code>"), parse_mode=ParseMode.HTML)
                 return
+            if verb in ("hours", "hrs", "h") and rest:
+                num, _, hrs = rest.partition(" ")
+                t = self.tasks.find(num.lstrip("#"))
+                try:
+                    hours = float(hrs.strip().rstrip("h"))
+                except ValueError:
+                    hours = 0
+                if t is None or hours <= 0:
+                    await update.message.reply_text(
+                        "like this: <code>/task hours 3 20</code> (20 hours of work left)",
+                        parse_mode=ParseMode.HTML)
+                    return
+                self.tasks.set_hours(t["id"], hours)
+                st = self.agenda.status(self.tasks.get(t["id"]), now.date())
+                await update.message.reply_text(
+                    f"📌 {html.escape(t['title'])}: {hours:g}h"
+                    + (f", so {st['per_day']:g}h/day to make {st['due']}"
+                       if st["per_day"] else ""), parse_mode=ParseMode.HTML)
+                return
+            if verb in ("pri", "priority") and rest:
+                num, _, lvl = rest.partition(" ")
+                t = self.tasks.find(num.lstrip("#"))
+                if t is None or not lvl.strip().isdigit():
+                    await update.message.reply_text(
+                        "like this: <code>/task pri 3 1</code> (1 = drop everything)",
+                        parse_mode=ParseMode.HTML)
+                    return
+                self.tasks.set_priority(t["id"], int(lvl))
+                await update.message.reply_text(
+                    f"📌 {html.escape(t['title'])} is priority {max(1, min(3, int(lvl)))}",
+                    parse_mode=ParseMode.HTML)
+                return
             if verb in ("done", "drop") and rest:
                 t = self.tasks.find(rest.lstrip("#"))
                 if t is None:
@@ -1025,6 +1214,7 @@ class LockstepBot:
                     return
                 self.tasks.close(t["id"], now, "done" if verb == "done" else "dropped")
                 self.ledger.append("task_" + verb, {"id": t["id"], "title": t["title"]})
+                await self._after_task_closed(update, t, now)
                 await update.message.reply_text(
                     f"✅ {html.escape(t['title'])} — done. that's a big one 🔥"
                     if verb == "done" else f"🗑 dropped {html.escape(t['title'])}.",
@@ -1060,6 +1250,38 @@ class LockstepBot:
             self.ledger.append("task_done", {"id": tid, "title": t["title"]})
         await q.edit_message_text(self._tasks_text(now.date()), parse_mode=ParseMode.HTML,
                                   reply_markup=self._task_buttons())
+
+    async def _after_task_closed(self, update, task, now: datetime) -> None:
+        """A finished task leaves holes in the plans he already wrote.
+
+        Those hours are the most valuable thing he owns: they are already
+        committed, already defended by the guard. Handing them straight to
+        whatever is closest to missing is the whole point of keeping deadlines
+        as numbers.
+        """
+        spare = []
+        for d in (now.date(), now.date() + timedelta(days=1), now.date() + timedelta(days=2)):
+            mins = sum(b["end_min"] - b["start_min"] for b in self.db.blocks(d)
+                       if self.tasks.owns(task, b["label"]))
+            if mins >= 30:
+                spare.append((d, mins))
+        if not spare:
+            return
+        risk = self.agenda.at_risk(now.date())
+        nxt = next((r for r in risk if r["id"] != task["id"]), None)
+        hours = sum(m for _, m in spare) / 60.0
+        where = ", ".join(f"{d:%a}" for d, _ in spare)
+        msg = (f"that frees {hours:.1f}h already in the plan ({where}).")
+        if nxt:
+            msg += (f" want me to put it on <b>{html.escape(nxt['title'])}</b>? "
+                    f"({nxt['verdict']}"
+                    + (f", {nxt['hours_left']:g}h left" if nxt["hours_left"] else "") + ")")
+        else:
+            msg += " want me to rebuild those days?"
+        try:
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        except Exception:                                     # noqa: BLE001
+            await self.send_user(msg)
 
     def _plan_task_note(self, target: date, blocks) -> str:
         """After a plan: the big task that should have been in it and isn't."""
@@ -1164,6 +1386,34 @@ class LockstepBot:
             names = ", ".join(r["text"] for r in f.left(day))
             await self._send_foundations(day, f"before bed — still left: {html.escape(names)}")
 
+    async def _weekly_review(self, now: datetime) -> str:
+        """What the week actually bought, per task, against what is still owed."""
+        today = now.date()
+        week = today - timedelta(days=6)
+        rows = self.agenda.all_status(today)
+        lines = []
+        for r in rows[:8]:
+            did = self.agenda.hours_done(r["id"], since=week)
+            lines.append(f"{r['title']}: {did:g}h this week"
+                         + (f", {r['hours_left']:g}h left" if r["hours_left"] else "")
+                         + (f", due {r['due']}" if r["due"] else ""))
+        sc = self.db.one(
+            "SELECT SUM(state='satisfied') ok, COUNT(*) n FROM checkpoints WHERE date >= ?",
+            (week.isoformat(),))
+        facts = ("this week, in proven hours:\n" + "\n".join(lines)
+                 + f"\nphotos: {int(sc['ok'] or 0)} of {int(sc['n'] or 0)} checks")
+        risk = self.agenda.at_risk(today)
+        if risk:
+            facts += ("\nat risk: " + "; ".join(
+                f"{r['title']} ({r['verdict']}"
+                + (f", needs {r['per_day']:g}h/day" if r["per_day"] else "") + ")"
+                for r in risk[:3]))
+        fallback = "📊 <b>the week</b>\n" + html.escape(facts)
+        return await self._human(
+            "the Sunday night review: what his week actually bought, in hours, and "
+            "which deadline needs the most attention next week",
+            facts, fallback, now)
+
     async def cmd_night(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
             return
@@ -1234,6 +1484,14 @@ class LockstepBot:
                     bits.append(f"{soon[0]['title']} is due {soon[0]['due']}.")
                 text = " ".join(bits)
             await self.send_user(text)
+            return
+
+        # Sunday evening: the week in hours, against what the deadlines need
+        review_at = _hhmm(conf.get("weekly_review_at", "21:00"))
+        if (day.weekday() == 6 and review_at.hour * 60 + review_at.minute <= minute
+                < review_at.hour * 60 + review_at.minute + 40
+                and self.db.claim(f"weekly:{day}")):
+            await self.send_user(await self._weekly_review(now))
             return
 
         # halfway through a long block: how's it going
@@ -2108,6 +2366,18 @@ class LockstepBot:
         if action == "rewrite_why":
             await self._rewrite_reason(update, text)
             return
+        if action == "plan_proposal":
+            # He answered the proposal with words instead of a button: treat
+            # them as the change he wants and build it again.
+            low = text.strip().lower()
+            day = pend["date"]
+            self.pending.pop(chat, None)
+            if low in ("ok", "yes", "yeah", "lock", "lock it", "да", "ok lock it"):
+                await self._accept_plan(update, day, pend["text"])
+                return
+            if await self._offer_built_plan(update, day, pend["text"] + "\n" + text,
+                                            self.cfg.now()):
+                return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
             return
@@ -2184,6 +2454,12 @@ class LockstepBot:
                 if busy else
                 "something broke on my end, try again in a minute. "
                 "/replan and photos still work")
+            return
+        want_plan, self.coach.last_make_plan = self.coach.last_make_plan, None
+        if want_plan is not None:
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self._chat_make_plan(update, want_plan, now)
             return
         late, self.coach.last_latenight = self.coach.last_latenight, None
         if late is not None:
@@ -2821,6 +3097,8 @@ class LockstepBot:
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup),
+            ("plan2", self.cmd_plandays), ("plandays", self.cmd_plandays),
+            ("forecast", self.cmd_forecast),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),
             ("cancel", self.cmd_cancel), ("commit", self.cmd_commit),
             ("setguardian", self.cmd_setguardian),
@@ -2843,3 +3121,19 @@ class LockstepBot:
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         app.job_queue.run_repeating(self.tick, interval=30, first=10, name="tick")
         return app
+
+
+class _Reply:
+    """Lets a button press reuse the code paths written for a message."""
+
+    def __init__(self, q, chat_id):
+        self._q = q
+        self.effective_chat = type("C", (), {"id": chat_id})()
+        self.message = self
+
+    async def reply_text(self, text, **kw):
+        await self._q.message.reply_text(text, **kw)
+
+    @property
+    def chat(self):
+        return self._q.message.chat

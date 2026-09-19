@@ -188,8 +188,26 @@ class Database:
             "SELECT * FROM blocks WHERE date = ? ORDER BY start_min", (day.isoformat(),)
         )
 
+    @staticmethod
+    def _merge(blocks: list[tuple[int, int, str, str]]) -> list[tuple[int, int, str, str]]:
+        """Join neighbours with the same label.
+
+        A day replanned four times ended up as 18:00-18:16 рнкп, 18:16-18:20
+        eat, 18:20-18:21 рнкп, 18:21-18:30 eat: every rewrite cuts the current
+        block at the current minute, and the pieces never healed. A one-minute
+        block is a checkpoint nobody can answer.
+        """
+        out: list[list] = []
+        for start, end, label, cat in sorted(blocks):
+            if out and out[-1][2] == label and out[-1][1] == start:
+                out[-1][1] = end
+            else:
+                out.append([start, end, label, cat])
+        return [tuple(b) for b in out]
+
     def replace_blocks(self, day: date, blocks: list[tuple[int, int, str, str]]) -> None:
         d = day.isoformat()
+        blocks = self._merge(blocks)
         self.run("DELETE FROM blocks WHERE date = ?", (d,))
         self.conn.executemany(
             "INSERT INTO blocks (date, start_min, end_min, label, category)"

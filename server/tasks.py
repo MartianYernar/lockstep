@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 """
 
+# Added after the table already existed on the live server.
+MIGRATIONS = {
+    # Roughly how many hours the whole thing still takes. Without it a deadline
+    # is a date with no weight behind it, and "SAT on 3 Oct" cannot be turned
+    # into "you need 1.6 hours a day from today".
+    "hours_needed": "REAL",
+    # 1 is drop-everything, 2 normal, 3 whenever. Ties are broken by deadline.
+    "priority": "INTEGER NOT NULL DEFAULT 2",
+}
+
 
 def _kw(title: str, keywords) -> str:
     words = [k.strip().lower() for k in (keywords or []) if k and k.strip()]
@@ -45,6 +55,10 @@ class Tasks:
     def __init__(self, db):
         self.db = db
         db.conn.executescript(SCHEMA)
+        have = {r["name"] for r in db.conn.execute("PRAGMA table_info(tasks)")}
+        for col, decl in MIGRATIONS.items():
+            if col not in have:
+                db.conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {decl}")
         db.conn.commit()
 
     # -- seeding --------------------------------------------------------------
@@ -59,10 +73,24 @@ class Tasks:
         for it in items or []:
             if isinstance(it, str):
                 it = {"title": it}
-            if self.db.one("SELECT 1 FROM tasks WHERE lower(title) = lower(?)",
-                           (it["title"].strip(),)):
+            have = self.db.one("SELECT * FROM tasks WHERE lower(title) = lower(?)",
+                               (it["title"].strip(),))
+            if have is not None:
+                # It exists, so it stays his. But a field he has never filled
+                # in is a blank, not a decision: the config's estimate goes in
+                # there, and anything he set himself is left alone. Without
+                # this, tasks that predate the hours column never get one and
+                # the forecast has nothing to work with.
+                for col, val in (("hours_needed", it.get("hours")),
+                                 ("due", it.get("due")),
+                                 ("priority", it.get("priority"))):
+                    blank = have[col] is None or (col == "priority" and have[col] == 2)
+                    if val and blank and have["status"] == "open":
+                        self.db.run(f"UPDATE tasks SET {col} = ? WHERE id = ?",
+                                    (val, have["id"]))
                 continue
-            self.add(it["title"], now, keywords=it.get("keywords"), due=it.get("due"))
+            self.add(it["title"], now, keywords=it.get("keywords"), due=it.get("due"),
+                     hours=it.get("hours"), priority=it.get("priority"))
             n += 1
         return n
 
@@ -94,12 +122,23 @@ class Tasks:
         return part[0] if len(part) == 1 else None
 
     # -- writing --------------------------------------------------------------
-    def add(self, title: str, now: datetime, keywords=None, due=None) -> int:
+    def add(self, title: str, now: datetime, keywords=None, due=None,
+            hours=None, priority=None) -> int:
         cur = self.db.run(
-            "INSERT INTO tasks (title, keywords, due, created_at) VALUES (?, ?, ?, ?)",
-            (title.strip(), _kw(title, keywords),
-             str(due) if due else None, now.isoformat()))
+            "INSERT INTO tasks (title, keywords, due, created_at, hours_needed, priority)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (title.strip(), _kw(title, keywords), str(due) if due else None,
+             now.isoformat(), float(hours) if hours else None,
+             int(priority) if priority else 2))
         return cur.lastrowid
+
+    def set_hours(self, task_id: int, hours: float) -> bool:
+        return self.db.run("UPDATE tasks SET hours_needed = ? WHERE id = ? AND status='open'",
+                           (float(hours), task_id)).rowcount > 0
+
+    def set_priority(self, task_id: int, priority: int) -> bool:
+        return self.db.run("UPDATE tasks SET priority = ? WHERE id = ? AND status='open'",
+                           (max(1, min(3, int(priority))), task_id)).rowcount > 0
 
     def set_due(self, task_id: int, due: date | None) -> bool:
         return self.db.run("UPDATE tasks SET due = ? WHERE id = ? AND status = 'open'",
@@ -142,6 +181,17 @@ class Tasks:
             if not any(k != k2 and k in k2 for k2, _ in hits):
                 keep.add(tid)
         return keep
+
+    @staticmethod
+    def owns(task, label: str) -> bool:
+        """Does this one task cover that block label?
+
+        `match` only searches open tasks, which is right everywhere except the
+        moment just after he finishes one -- and that is exactly when the
+        blocks it still holds in future plans matter most.
+        """
+        text = (label or "").lower()
+        return any(k and k in text for k in (task["keywords"] or "").split(","))
 
     # -- what deserves a mention ---------------------------------------------
     def stale(self, day: date, days: int) -> list:
