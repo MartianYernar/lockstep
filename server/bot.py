@@ -178,6 +178,7 @@ class LockstepBot:
                 BotCommand("events", "meetings and events coming up"),
                 BotCommand("night", "tonight's basics: socks, clothes, teeth"),
                 BotCommand("standup", "what am I doing exactly, right now"),
+                BotCommand("paper", "this block is on paper, not the computer"),
                 BotCommand("plan2", "build the next 2 days for me"),
                 BotCommand("forecast", "will I make my deadlines?"),
                 BotCommand("plan", "write tomorrow's timetable"),
@@ -1347,6 +1348,45 @@ class LockstepBot:
         n = su.ask(now, blk["label"])
         await self.send_user(su.question(n))
 
+    async def cmd_paper(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE,
+                        which: str | None = None) -> None:
+        """This block is off the computer, so prove it with a photo instead.
+
+        A blocker screenshot is the right proof for two hours in front of a
+        laptop and the wrong proof for SAT questions done on the floor. The
+        block keeps its name and its hours; only what counts as proof changes,
+        and it goes on the record.
+        """
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        today, minute = now.date(), now.hour * 60 + now.minute
+        arg = (which if which is not None
+               else update.message.text.partition(" ")[2]).strip()
+        blocks = self.db.blocks(today)
+        blk = next((b for b in blocks if arg and arg.lower() in b["label"].lower()), None) \
+            or next((b for b in blocks if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None:
+            await update.message.reply_text(
+                "which block? you're not in one right now — <code>/paper math</code>",
+                parse_mode=ParseMode.HTML)
+            return
+        n = self.db.run(
+            "UPDATE checkpoints SET kind='activity' WHERE date=? AND block_id=?"
+            " AND kind LIKE 'blocker%' AND state IN ('scheduled','asked','overdue')",
+            (today.isoformat(), blk["id"])).rowcount
+        if not n:
+            await update.message.reply_text(
+                f"<b>{html.escape(blk['label'])}</b> already wants a photo, not a "
+                "screenshot. just send it.", parse_mode=ParseMode.HTML)
+            return
+        self.ledger.append("block_on_paper",
+                           {"date": today.isoformat(), "label": blk["label"], "checks": n})
+        await update.message.reply_text(
+            f"got it — <b>{html.escape(blk['label'])}</b> is on paper. "
+            f"{n} check{'s' if n != 1 else ''} left on it want a photo of you "
+            "working now, clock in shot.", parse_mode=ParseMode.HTML)
+
     async def cmd_standup(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
             return
@@ -2216,6 +2256,11 @@ class LockstepBot:
             # judgement about an ordinary street, and he is the one who knows
             # whether the poles behind him name his address.
             explainable = verdict.failure_code in ("mismatch", "privacy_location")
+            # "work:" asks for a blocker screenshot, which is impossible if the
+            # work is on paper. 19 Sep: the planner put "work:" in front of
+            # "math sat questions without chair at table, on knees" and then
+            # demanded a Cold Turkey window for it.
+            on_paper = verdict.failure_code in ("no_blocker", "blocker_off")
             self.last_reject = ({"cp": cp["id"], "blob": blob, "mime": mime, "at": now,
                                  "label": label, "category": category,
                                  "kind": cp["kind"] or "activity",
@@ -2225,7 +2270,10 @@ class LockstepBot:
                 f"❌ doesn't count.\n\n{html.escape(verdict.reason)}\n\n"
                 + ("wrong read? tell me what it is (like \"рнкп is my presentation\") "
                    "and I'll look again. or send another one."
-                   if explainable else "send another one, it's still open."),
+                   if explainable else
+                   "doing this one on paper? say <code>/paper</code> and I'll take a "
+                   "photo of you working instead." if on_paper else
+                   "send another one, it's still open."),
                 parse_mode=ParseMode.HTML)
             return
 
@@ -2469,6 +2517,12 @@ class LockstepBot:
                 if busy else
                 "something broke on my end, try again in a minute. "
                 "/replan and photos still work")
+            return
+        paper, self.coach.last_on_paper = self.coach.last_on_paper, None
+        if paper is not None:
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self.cmd_paper(update, None, which=paper)
             return
         want_plan, self.coach.last_make_plan = self.coach.last_make_plan, None
         if want_plan is not None:
@@ -3111,7 +3165,7 @@ class LockstepBot:
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
-            ("standup", self.cmd_standup),
+            ("standup", self.cmd_standup), ("paper", self.cmd_paper),
             ("plan2", self.cmd_plandays), ("plandays", self.cmd_plandays),
             ("forecast", self.cmd_forecast),
             ("disable", self.cmd_disable), ("enable", self.cmd_enable),

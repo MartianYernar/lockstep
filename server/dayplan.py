@@ -41,8 +41,13 @@ HARD RULES -- a plan that breaks one is thrown away:
   {start}, last ends at {end}. Blocks outside that range are allowed before
   {start} if he asked for them, never after {end}.
 - Use his words for anything he specified. Keep his labels.
-- Put "work: " in front of blocks that are study or project work, and nothing
-  else. Never on meals, commute, sport, rest, hygiene.
+- "work: " is not a label, it is an instruction: it means the proof for that
+  block is a screenshot of his computer blocker. So use it ONLY for blocks you
+  add yourself that are done AT A COMPUTER. Never on meals, commute, sport,
+  rest, hygiene. Never on work done on paper, in a notebook, on a whiteboard
+  or out of the house.
+  NEVER add it to, or remove it from, a block HE wrote. His words are his: if
+  he wrote "do math sat questions on knees", that block stays exactly that.
 - 45 to 120 minutes per work block. Shorter than 45 is churn, longer than 120
   he will not sustain. Non-work blocks can be any length.
 - Give every big task he names its own block. Never merge two tasks into one

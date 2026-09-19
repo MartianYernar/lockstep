@@ -140,6 +140,7 @@ class Coach:
         self.last_judge_was_reason = True
         self.last_latenight: str | None = None
         self.last_make_plan: dict | None = None
+        self.last_on_paper: str | None = None
 
     # -- config ---------------------------------------------------------------
     @property
@@ -448,6 +449,8 @@ class Coach:
         self.last_plan_edits = [a for a in actions
                                 if isinstance(a, dict) and a.get("type") == "edit_plan"
                                 and (a.get("plan") or "").strip()]
+        op = [a for a in actions if isinstance(a, dict) and a.get("type") == "on_paper"]
+        self.last_on_paper = (op[0].get("text") or "").strip() if op else None
         mp = [a for a in actions if isinstance(a, dict) and a.get("type") == "make_plan"]
         self.last_make_plan = mp[0] if mp else None
         ln = [a for a in actions if isinstance(a, dict) and a.get("type") == "start_latenight"]
@@ -565,7 +568,7 @@ class Coach:
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
                 elif kind not in ("edit_plan", "recheck_photo", "start_latenight",
-                                  "make_plan"):
+                                  "make_plan", "on_paper"):
                     done.append(f"⚠️ didn't know what to do with \"{kind}\"")
             except (ValueError, TypeError) as exc:
                 log.warning("coach action %s failed: %s", kind, exc)
@@ -679,6 +682,10 @@ actually told you, never guessed:
   his last photo was rejected and he's explaining what it shows or what the
   task means. The app re-checks the same photo with his explanation. You don't
   decide -- never say it counts. Use define too if he explained a shorthand.
+- {"type":"on_paper","text":"which block, or empty for the one he's in"}  when
+  he says a block is on paper, in a notebook, by hand, or away from his
+  computer and the app is demanding a blocker screenshot for it. The proof
+  becomes a photo of him working instead.
 - {"type":"make_plan","day":"today"/"tomorrow"/"YYYY-MM-DD","days":1,"text":"..."}
   when he asks YOU to build the plan ("plan my day", "plan the next 2 days",
   "rest plan yourself"). Put whatever he fixed in "text", word for word, and
@@ -712,7 +719,7 @@ REPLY_SCHEMA = {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
                     "edit_plan", "define", "recheck_photo", "tick_basic",
-                    "start_latenight", "make_plan"]},
+                    "start_latenight", "make_plan", "on_paper"]},
                 "days": {"type": "INTEGER"},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
