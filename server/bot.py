@@ -53,6 +53,8 @@ class LockstepBot:
         self.agenda = Agenda(db, cfg, self.tasks)
         self.coach.agenda = self.agenda
         self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda)
+        from .dayplan import Proposals
+        self.proposals = Proposals(db)
         try:
             self.coach.terms.seed(cfg.raw.get("terms"), cfg.now())
         except Exception as exc:                              # noqa: BLE001
@@ -885,18 +887,19 @@ class LockstepBot:
             log.warning("dayplan failed: %s", exc)
             return False
         rendered = "\n".join(f"{b.hhmm()} {b.label}" for b in blocks)
+        pid = self.proposals.add(day, rendered, note, now)
         self.pending[update.effective_chat.id] = {
-            "action": "plan_proposal", "date": day, "text": rendered}
+            "action": "plan_proposal", "date": day, "text": rendered, "id": pid}
         when = "today" if day == now.date() else (
             "tomorrow" if day == now.date() + timedelta(days=1) else f"{day:%a %d %b}")
         await update.message.reply_text(
-            f"here's {when}:\n\n{planner.render(blocks)}"
+            f"here's <b>{when}</b> ({day:%a %d %b}):\n\n{planner.render(blocks)}"
             + (f"\n\n{html.escape(note)}" if note else "")
             + "\n\nlock it in?",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ lock it", callback_data="plan:ok"),
-                InlineKeyboardButton("🔁 redo", callback_data="plan:redo")]]))
+                InlineKeyboardButton("✅ lock it", callback_data=f"plan:ok:{pid}"),
+                InlineKeyboardButton("🔁 redo", callback_data=f"plan:redo:{pid}")]]))
         return True
 
     async def _chat_make_plan(self, update: Update, want: dict, now: datetime) -> None:
@@ -935,21 +938,31 @@ class LockstepBot:
                                     "\n".join(f"{b.hhmm()} {b.label}" for b in blocks))
 
     async def _on_plan_button(self, q) -> None:
+        """Lock the plan on THIS message, not whichever one came last."""
         chat = q.message.chat.id if getattr(q, "message", None) else self.cfg.user_chat_id
-        pend = self.pending.get(chat) or {}
-        if pend.get("action") != "plan_proposal":
-            await q.edit_message_text("that plan's gone stale — send /plan again.")
-            return
         now = self.cfg.now()
-        if q.data.endswith(":redo"):
-            self.pending.pop(chat, None)
+        parts = q.data.split(":")
+        pid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        row = self.proposals.get(pid) if pid else None
+        if row is None:
+            await q.edit_message_text("that plan's gone — send /plan again.")
+            return
+        if q.data.startswith("plan:redo"):
+            self.proposals.use(row["id"], now)
+            if (self.pending.get(chat) or {}).get("id") == row["id"]:
+                self.pending.pop(chat, None)
             await q.edit_message_text("ok, tell me what to change and I'll redo it.")
             return
-        day, text = pend["date"], pend["text"]
-        self.pending.pop(chat, None)
-        await q.edit_message_text("locked in 🤝")
-        update = _Reply(q, chat)
-        await self._accept_plan(update, day, text)
+        if row["used_at"]:
+            await q.edit_message_text("that one's already locked in — /today to see it.")
+            return
+        if not self.proposals.use(row["id"], now):
+            return
+        day = date.fromisoformat(row["date"])
+        if (self.pending.get(chat) or {}).get("id") == row["id"]:
+            self.pending.pop(chat, None)
+        await q.edit_message_text(f"locked in for {day:%a %d %b} 🤝")
+        await self._accept_plan(_Reply(q, chat), day, row["text"])
 
     async def cmd_plandays(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/plan2 -- the next two days at once, built around the deadlines."""

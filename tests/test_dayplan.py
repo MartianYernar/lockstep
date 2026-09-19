@@ -124,9 +124,9 @@ class Q:
     async def _reply(self, t, **kw): self.replies.append(t)
 
 
-q = Q("plan:ok")
+q = Q(f"plan:ok:{bot.pending[1]['id']}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
-check("it says so", q.edited, "locked in 🤝")
+check("it says so, naming the day", q.edited.startswith("locked in for"), True)
 check("and the plan is in the database", labels(db)[0], "work: physics IA")
 check("covering the whole window",
       (db.blocks(DAY)[0]["start_min"], db.blocks(DAY)[-1]["end_min"]), (16 * 60, 22 * 60))
@@ -136,7 +136,7 @@ print("\n=== redo leaves everything alone ===")
 cfg, db, led, eng, bot = make()
 model(bot, [BUILT])
 run(bot.cmd_plan(FakeUpdate("/plan\n" + HIS_MESSAGE), None))
-q = Q("plan:redo")
+q = Q(f"plan:redo:{bot.pending[1]['id']}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
 check("nothing locked", labels(db), [])
 check("and he's asked what to change", "what to change" in q.edited, True)
@@ -302,5 +302,50 @@ check("so is a blank deadline", t.find("ielts")["due"], "2026-09-30")
 check("and a default priority", t.find("ielts")["priority"], 1)
 check("but a number he set himself is never overwritten",
       t.find("sat prep")["hours_needed"], 99.0)
+
+print("\n=== the button locks the plan it was attached to ===")
+# 19 Sep: he locked a plan and /today showed a different one. The button read
+# "whatever proposal is in memory now", so the second offer replaced the first.
+cfg, db, led, eng, bot = make()
+model(bot, [BUILT])
+u = FakeUpdate("/plan\n" + HIS_MESSAGE)
+run(bot.cmd_plan(u, None))
+first_id = bot.pending[1]["id"]
+first_text = bot.pending[1]["text"]
+
+SECOND = {"blocks": [
+    {"start": "16:00", "end": "19:00", "label": "work: IELTS speaking"},
+    {"start": "19:00", "end": "22:00", "label": "work: SAT reading"}],
+    "note": "swapped it"}
+model(bot, [SECOND])
+u2 = FakeUpdate("/plan\nactually do IELTS first")
+run(bot.cmd_plan(u2, None))
+second_id = bot.pending[1]["id"]
+check("two proposals, two ids", first_id != second_id, True)
+
+q = Q(f"plan:ok:{first_id}")
+run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
+check("tapping the FIRST message locks the FIRST plan",
+      labels(db)[0], "work: physics IA")
+check("not the newer one", "work: IELTS speaking" in labels(db), False)
+check("and it says which day", "locked in for" in q.edited, True)
+
+q2 = Q(f"plan:ok:{first_id}")
+run(bot.on_button(types.SimpleNamespace(callback_query=q2), None))
+check("tapping it twice changes nothing", "already locked in" in q2.edited, True)
+
+print("\n=== and it survives a restart ===")
+cfg, db, led, eng, bot = make()
+model(bot, [BUILT])
+run(bot.cmd_plan(FakeUpdate("/plan\n" + HIS_MESSAGE), None))
+pid = bot.pending[1]["id"]
+bot.pending.clear()                      # what a redeploy does to memory
+q = Q(f"plan:ok:{pid}")
+run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
+check("the plan is still there after the bot restarts", labels(db)[0], "work: physics IA")
+
+q = Q("plan:ok:9999")
+run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
+check("an id nobody knows says so, and locks nothing", "gone" in q.edited, True)
 
 sys.exit(report("DAYPLAN TESTS"))

@@ -74,6 +74,47 @@ Send the corrected JSON, same shape. Keep everything he fixed. Cover
 {start}-{end} exactly."""
 
 
+PROPOSAL_SCHEMA = """
+-- A built plan, exactly as he was shown it, waiting for his button.
+--
+-- 19 Sep he locked one and /today showed something else. The button carried
+-- no identity: it read "whatever proposal is in memory right now", so a
+-- second offer -- he replies, it rebuilds -- silently replaced the first, and
+-- tapping the older message locked the newer plan. In memory it also died on
+-- every restart. Now the id is in the button and the text is on disk, so what
+-- he taps is what he gets, an hour later or after a deploy.
+CREATE TABLE IF NOT EXISTS proposals (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    date       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    used_at    TEXT
+);
+"""
+
+
+class Proposals:
+    def __init__(self, db):
+        self.db = db
+        db.conn.executescript(PROPOSAL_SCHEMA)
+        db.conn.commit()
+
+    def add(self, day, text: str, note: str, now) -> int:
+        return self.db.run(
+            "INSERT INTO proposals (date, text, note, created_at) VALUES (?, ?, ?, ?)",
+            (day.isoformat(), text, note or "", now.isoformat())).lastrowid
+
+    def get(self, pid: int):
+        return self.db.one("SELECT * FROM proposals WHERE id = ?", (pid,))
+
+    def use(self, pid: int, now) -> bool:
+        """Claim it exactly once, so a double tap cannot lock it twice."""
+        return self.db.run(
+            "UPDATE proposals SET used_at = ? WHERE id = ? AND used_at IS NULL",
+            (now.isoformat(), pid)).rowcount > 0
+
+
 class DayPlanner:
     def __init__(self, coach, cfg, db, agenda):
         self.coach = coach
