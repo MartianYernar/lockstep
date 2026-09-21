@@ -214,8 +214,9 @@ class Tasks:
             bits = []
             if r["due"]:
                 left = (date.fromisoformat(r["due"]) - day).days
-                bits.append("OVERDUE" if left < 0 else
-                            "due today" if left == 0 else f"due in {left}d ({r['due']})")
+                bits.append(f"OVERDUE (was due {r['due']})" if left < 0 else
+                            f"DUE TODAY ({r['due']})" if left == 0 else
+                            f"due in {left}d ({r['due']})")
             else:
                 bits.append("no deadline set")
             if r["last_touched"]:

@@ -121,7 +121,10 @@ class Agenda:
         rows = [self.status(t, today) for t in self.tasks.open()]
         order = {"OVERDUE": 0, "WILL MISS": 1, "tight": 2, "on track": 3,
                  "no estimate": 4, "hours are in": 5, "no deadline": 6}
-        rows.sort(key=lambda r: (order.get(r["verdict"], 9),
+        # Due today outranks everything still open: it is the one thing that
+        # cannot be moved to tomorrow.
+        rows.sort(key=lambda r: (-1 if r["days_left"] == 0 and r["verdict"] != "hours are in"
+                                 else order.get(r["verdict"], 9),
                                  r["days_left"] if r["days_left"] is not None else 999,
                                  r["priority"]))
         return rows
@@ -153,7 +156,8 @@ class Agenda:
         for r in self.all_status(today)[:12]:
             bits = [f"#{r['id']} {r['title']}", f"priority {r['priority']}"]
             if r["due"]:
-                bits.append(f"due {r['due']} ({r['days_left']}d)")
+                bits.append("DUE TODAY -- give it the first work block" if r["days_left"] == 0
+                            else f"due {r['due']} ({r['days_left']}d)")
             if r["hours_needed"]:
                 bits.append(f"{r['hours_left']:g}h of {r['hours_needed']:g}h still to do")
             if r["per_day"]:

@@ -25,13 +25,15 @@ def N(h, m):
     return datetime(2026, 8, 25, h, m, tzinfo=TZ)
 
 
-def make(now, **conf):
+def make(now, proof=None, **conf):
     raw = copy.deepcopy(RAW)
     raw["coach"] = {"enabled": True, "max_calls_per_day": 150}
     raw["friend"] = {"enabled": True, "checkins_per_day": 0}
     raw["standup"] = {"enabled": True, "every_min": 20, "max_per_day": 24,
                       "skip_categories": ["commute", "meal", "sleep", "relax"], **conf}
     raw["schedule"] = dict(raw["schedule"], mode="block_start", grace_min=3)
+    if proof:
+        raw["proof"] = proof
     cfg, db, led, eng, lk = build(raw, now=now)
     bot = LockstepBot(cfg, db, led, eng, lk, StubValidator())
     bot.app = types.SimpleNamespace(bot=FakeBot())
@@ -47,7 +49,7 @@ def make(now, **conf):
 def model(bot, reply="ok"):
     seen = {"notes": []}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["notes"].append(system)
         bot.coach._charge(now.date())
         return json.dumps({"reply": reply, "actions": []})
@@ -150,6 +152,36 @@ check("and drops out of the report", "20-min checks" in bot._report_text(DAY), F
 cfg, db, led, eng, bot = make(N(17, 30), every_min=30)
 run(bot._standup_tick(N(17, 30)))
 check("the interval is configurable", len(sent(bot)), 1)
+
+print("\n=== one message on the mark, not two ===")
+# 21 Sep: the photo ask and the three questions landed in the same second,
+# every 20 minutes, all evening.
+cfg, db, led, eng, bot = make(N(17, 20), proof={"within_block_min": 20})
+cp = db.one("SELECT * FROM checkpoints WHERE date=? AND due_at=?",
+            (DAY.isoformat(), N(17, 20).isoformat()))
+db.run("UPDATE checkpoints SET state='scheduled' WHERE id=?", (cp["id"],))
+run(bot._standup_tick(N(17, 20)))
+check("the standup holds back while a photo is due", sent(bot), [])
+run(bot._dispatch(types.SimpleNamespace(kind="ask", payload={
+    "due_at": N(17, 20).isoformat(), "label": "work: physics IA", "kind": "activity",
+    "checkpoint_id": cp["id"]}), N(17, 20)))
+msgs = sent(bot)
+check("one message went out", len(msgs), 1)
+check("it asks for the photo", "pic" in msgs[0].lower() or "show me" in msgs[0].lower(), True)
+check("and carries the questions", "exactly" in msgs[0] and "stuck" in msgs[0], True)
+check("the standup is recorded, so his text is the answer",
+      bot.standups.count_asked(DAY), 1)
+run(bot._standup_tick(N(17, 20)))
+check("and it isn't asked a second time", len(sent(bot)), 1)
+
+cfg, db, led, eng, bot = make(N(17, 0), proof={"within_block_min": 20})
+cp = db.one("SELECT * FROM checkpoints WHERE date=? AND due_at=?",
+            (DAY.isoformat(), N(17, 0).isoformat()))
+run(bot._dispatch(types.SimpleNamespace(kind="ask", payload={
+    "due_at": N(17, 0).isoformat(), "label": "work: physics IA", "kind": "blocker_toggle",
+    "checkpoint_id": cp["id"]}), N(17, 0)))
+check("the start of a block asks only for the screenshot", "stuck" in sent(bot)[0], False)
+check("and records no standup", bot.standups.count_asked(DAY), 0)
 
 print("\n=== /standup asks on demand ===")
 cfg, db, led, eng, bot = make(N(17, 5))

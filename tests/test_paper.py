@@ -131,7 +131,7 @@ import json  # noqa: E402
 cfg, db, led, eng, bot = make()
 
 
-async def fake(system, contents, now, max_tokens=400, schema=None):
+async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
     bot.coach._charge(now.date())
     return json.dumps({"reply": "ah you're on paper, got it",
                        "actions": [{"type": "on_paper", "text": ""}]})
@@ -143,13 +143,22 @@ check("then the switch", "on paper" in u.message.last, True)
 check("the checks changed", set(k for k in kinds(db) if k), {"activity"})
 
 print("\n=== the planner is told to leave his labels alone ===")
-from server.dayplan import SYSTEM  # noqa: E402
-check("work: is described as an instruction, not a label",
-      "not a label" in SYSTEM and "blocker" in SYSTEM, True)
-check("only for blocks it adds, at a computer", "AT A COMPUTER" in SYSTEM, True)
-check("never on paper work", "on paper" in SYSTEM, True)
-check("and never added to or removed from his own words",
-      "NEVER add it to, or remove it from, a block HE wrote" in SYSTEM, True)
+from server.dayplan import SYSTEM, DayPlanner  # noqa: E402
+check("the planner is told it's a switch only he flips",
+      "only he flips" in SYSTEM and "Never write \"work: \"" in SYSTEM, True)
+# 21 Sep it added "work:" to "sat prep" anyway. The code has the last word.
+built = planner.parse("16:10-17:40 work: Physics IA\n17:40-19:40 work: sat prep\n"
+                      "19:40-22:00 work: essay")
+kept = DayPlanner._keep_his_switch(built, "16:10-17:40 work: physics IA\nrest yourself")
+check("a work: he never wrote is taken off", kept[1].label, "sat prep")
+check("and the proof it demands follows the label",
+      kept[1].category, planner.categorise("sat prep"))
+check("one he wrote himself stays", kept[0].label, "work: Physics IA")
+check("even with different spacing and case",
+      DayPlanner._keep_his_switch(built, "WORK:   ESSAY")[2].label, "work: essay")
+check("nothing he wrote, nothing kept",
+      [b.label for b in DayPlanner._keep_his_switch(built, "")],
+      ["Physics IA", "sat prep", "essay"])
 
 print("\n=== a blocker that is merely switched off is the same offer ===")
 cfg, db, led, eng, bot = make(code="blocker_off")

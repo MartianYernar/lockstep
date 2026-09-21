@@ -89,6 +89,34 @@ try:
 except RuntimeError as exc:
     check("a real error is not swallowed", "401" in str(exc), True)
 
+print("\n=== thinking where it pays, cheap where it doesn't ===")
+# Chat, the replan judge and the planner are where Friday has to understand
+# him: the strongest model, with room to think. Worded nags don't need it, and
+# they never touch the strongest model, so they can't use up its quota.
+raw = copy.deepcopy(RAW)
+raw["gemini"] = dict(raw["gemini"], models=CHAIN)
+cfg, db, led, eng, lk = build(raw, now=NOW)
+coach = Coach(cfg, db, eng)
+check("smart starts at the strongest model", coach._models("smart")[0], "m-last")
+check("cheap never touches it", "m-last" in coach._models("cheap"), False)
+coach._client, fm = client({})
+run(coach._ask("sys", ["hi"], NOW))
+check("smart thinks", fm.calls[-1], ("m-last", True))
+coach._client, fm = client({})
+run(coach._ask("sys", ["hi"], NOW, tier="cheap"))
+check("cheap asks the next model down", fm.calls[-1][0], "m-third")
+
+tiers = []
+
+
+async def spy(system, contents, now, max_tokens=400, schema=None, tier="smart"):
+    tiers.append(tier)
+    return '{"reply": "ok", "actions": []}'
+coach._ask = spy
+run(coach.say("nag", "facts", NOW))
+run(coach.reply("yo", NOW))
+check("nags are cheap, chat is smart", tiers, ["cheap", "smart"])
+
 print("\n=== vision, one model later ===")
 raw = copy.deepcopy(RAW)
 raw["gemini"] = dict(raw["gemini"], models=["vision-a", "vision-b", "vision-c"],

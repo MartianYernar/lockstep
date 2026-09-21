@@ -93,7 +93,7 @@ def model(bot, answer=None, fail=False):
     """Stub the coach's model. `answer` may be a string or a callable."""
     seen = {"n": 0, "last": None}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["n"] += 1
         seen["last"] = (system, contents, schema)
         if fail:

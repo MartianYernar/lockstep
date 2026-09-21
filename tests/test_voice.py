@@ -29,8 +29,10 @@ def N(h, m):
     return datetime(2026, 8, 25, h, m, tzinfo=TZ)
 
 
-def make(now=N(17, 0), reserve=30, calls=150):
+def make(now=N(17, 0), reserve=30, calls=150, proof=None):
     raw = copy.deepcopy(RAW)
+    if proof:
+        raw["proof"] = proof
     raw["coach"] = {"enabled": True, "max_calls_per_day": calls, "say_reserve": reserve}
     raw["standup"] = {"enabled": False}
     raw["schedule"] = dict(raw["schedule"], mode="block_start", grace_min=3)
@@ -49,7 +51,7 @@ def make(now=N(17, 0), reserve=30, calls=150):
 def model(bot, reply="yo, pic for physics IA whenever you're ready", fail=False):
     seen = {"jobs": [], "facts": [], "n": 0}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["n"] += 1
         text = contents[0] if isinstance(contents[0], str) else ""
         if "WHAT THIS IS ABOUT" in text:
@@ -157,6 +159,34 @@ cfg, db, led, eng, bot = make(reserve=0)
 seen = model(bot)
 ask(bot)
 check("with no reserve set, Friday words everything", seen["n"], 1)
+
+print("\n=== ignored twice, the written line is enough ===")
+# 21 Sep: seventeen asks and seventeen "where's the pic", each worded fresh,
+# spent the allowance on messages nobody was reading.
+cfg, db, led, eng, bot = make(N(17, 0), reserve=0, proof={"within_block_min": 20})
+db.run("UPDATE checkpoints SET state='missed' WHERE date=? AND due_at < ?",
+       (DAY.isoformat(), N(16, 40).isoformat()))
+cp = db.one("SELECT id, due_at FROM checkpoints WHERE date=? AND due_at >= ? ORDER BY due_at",
+            (DAY.isoformat(), N(16, 40).isoformat()))
+seen = model(bot)
+ask(bot, now=datetime.fromisoformat(cp["due_at"]), cid=cp["id"])
+check("the ask still goes out", len(sent(bot)), 1)
+check("from the written line, no model call", seen["n"], 0)
+run(bot._dispatch(types.SimpleNamespace(
+    kind="mark_missed", payload={"labels": ["work: physics IA"], "count": 1,
+                                 "checkpoint_id": cp["id"]}), N(17, 5)))
+check("the miss too", (len(sent(bot)), seen["n"]), (2, 0))
+
+cfg, db, led, eng, bot = make(N(17, 0), reserve=0, proof={"within_block_min": 20})
+db.run("UPDATE checkpoints SET state='satisfied' WHERE date=? AND due_at < ?",
+       (DAY.isoformat(), N(16, 20).isoformat()))
+db.run("UPDATE checkpoints SET state='missed' WHERE date=? AND due_at >= ? AND due_at < ?",
+       (DAY.isoformat(), N(16, 20).isoformat(), N(16, 40).isoformat()))
+cp = db.one("SELECT id, due_at FROM checkpoints WHERE date=? AND due_at >= ? ORDER BY due_at",
+            (DAY.isoformat(), N(16, 40).isoformat()))
+seen = model(bot)
+ask(bot, now=datetime.fromisoformat(cp["due_at"]), cid=cp["id"])
+check("one miss alone still gets Friday's words", seen["n"], 1)
 
 print("\n=== nothing is invented ===")
 cfg, db, led, eng, bot = make()

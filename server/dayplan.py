@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from datetime import date, datetime
 
@@ -41,17 +42,18 @@ HARD RULES -- a plan that breaks one is thrown away:
   {start}, last ends at {end}. Blocks outside that range are allowed before
   {start} if he asked for them, never after {end}.
 - Use his words for anything he specified. Keep his labels.
-- "work: " is not a label, it is an instruction: it means the proof for that
-  block is a screenshot of his computer blocker. So use it ONLY for blocks you
-  add yourself that are done AT A COMPUTER. Never on meals, commute, sport,
-  rest, hygiene. Never on work done on paper, in a notebook, on a whiteboard
-  or out of the house.
-  NEVER add it to, or remove it from, a block HE wrote. His words are his: if
-  he wrote "do math sat questions on knees", that block stays exactly that.
+- Never write "work: " in front of a label. It is not a word, it is a switch
+  that changes what proof the app demands, and only he flips it. If HE wrote
+  "work: something", keep that block's label exactly as he wrote it. His words
+  are his: if he wrote "do math sat questions on knees", that block stays
+  exactly that.
 - 45 to 120 minutes per work block. Shorter than 45 is churn, longer than 120
   he will not sustain. Non-work blocks can be any length.
 - Give every big task he names its own block. Never merge two tasks into one
   block ("math and physics" is not a block).
+- Nothing for a task after its deadline. If the chat says something is due at
+  a time today ("IA due 8pm"), every block for it ends by then -- work on it
+  after the deadline is worthless.
 
 HOW TO CHOOSE WHAT GOES IN THE FREE TIME:
 - The agenda below is ordered by urgency. Anything marked WILL MISS or OVERDUE
@@ -59,7 +61,12 @@ HOW TO CHOOSE WHAT GOES IN THE FREE TIME:
 - Respect "needs Xh/day" -- that is the number that makes the deadline.
 - Two or three different tasks in an evening, not five. Switching costs him.
 - Hardest thing first, while he is fresh, unless he says otherwise.
-- Leave what he already fixed exactly where he put it."""
+- Leave what he already fixed exactly where he put it.
+- Read the chat below. If he told Friday something today ("IA deadline moved to
+  8pm", "I'm wiped", "SAT first"), it shapes this plan. A deadline tonight
+  means that task goes first and ends before the deadline.
+- Never invent a class, lesson, meeting or event. Only put in fixed things he
+  wrote or that are in the FIXED list."""
 
 BUILD = """TODAY IS {today}. This plan is for {day} ({weekday}).
 The enforced window is {start}-{end}. He must be doing something the whole time.
@@ -70,8 +77,35 @@ WHAT HE SAID:
 HIS BIG TASKS, most urgent first:
 {agenda}
 
-{events}{steps}{history}
+{events}{steps}{chat}
 Build the plan. If he fixed some hours, keep them exactly and fill the rest."""
+
+# 21 Sep: every "change X" re-sent the whole old plan as if he had typed it,
+# under a prompt that says keep what he fixed. The planner kept everything and
+# could not honour the change -- seven rebuilds in nine minutes. A revision is
+# its own job: here is the plan, here is the one thing to change.
+REVISE = """TODAY IS {today}. You proposed this plan for {day} ({weekday}); he
+has seen it and wants a change.
+
+THE PLAN HE WAS SHOWN:
+{current}
+
+THE CHANGE HE WANTS (do exactly this):
+{change}
+
+What he asked for in the first place:
+{text}
+
+HIS BIG TASKS, most urgent first:
+{agenda}
+
+{events}{chat}
+Make his change. Keep every other block as it was unless the change forces it
+to move; if it does, move the fewest blocks you can -- and never past a
+task's deadline (check the chat for a time today). If his change can't be done
+without breaking a deadline, do the closest thing that keeps it and say so in
+"note". Cover {start}-{end}
+exactly. In "note", say in one line what you changed."""
 
 REPAIR = """That plan was rejected: {error}
 
@@ -137,18 +171,40 @@ class DayPlanner:
         lines = "\n".join(f"  {r['at_ts'][11:16]} {r['text']}" for r in rows)
         return f"FIXED THAT DAY -- plan around these, they are not optional:\n{lines}\n\n"
 
-    def _history(self, day: date) -> str:
-        prev = self.db.q(
-            "SELECT date, start_min, end_min, label FROM blocks WHERE date < ?"
-            " ORDER BY date DESC, start_min LIMIT 8", (day.isoformat(),))
-        if not prev:
+    def _chat(self, now: datetime) -> str:
+        """Today's conversation with Friday -- where "the IA moved to 8pm" lives.
+
+        This replaced yesterday's plan, which the model copied from: a Monday
+        lesson it had seen once turned up in a proposal as if it were fixed.
+        """
+        rows = self.db.q(
+            "SELECT role, text FROM coach_log WHERE date = ? ORDER BY id DESC LIMIT 8",
+            (now.date().isoformat(),))
+        if not rows:
             return ""
-        last = prev[0]["date"]
         lines = "\n".join(
-            f"  {b['start_min']//60:02d}:{b['start_min']%60:02d}-"
-            f"{b['end_min']//60:02d}:{b['end_min']%60:02d} {b['label']}"
-            for b in prev if b["date"] == last)
-        return f"WHAT HE PLANNED ON {last}, for the shape of his day:\n{lines}\n\n"
+            f"  {'him' if r['role'] == 'user' else 'Friday'}: {r['text'][:300]}"
+            for r in reversed(rows))
+        return f"TODAY'S CHAT WITH FRIDAY (newest last):\n{lines}\n\n"
+
+    @staticmethod
+    def _keep_his_switch(blocks: list, his: str) -> list:
+        """Drop a "work:" the model added. Keep one he wrote himself.
+
+        The prompt says this; 21 Sep it still put "work:" on "sat prep", and
+        the app demanded a blocker screenshot for SAT questions on paper. A
+        rule that decides what proof he owes is enforced here, not requested.
+        """
+        low = re.sub(r"\s+", " ", (his or "").lower())
+        out = []
+        for b in blocks:
+            m = re.match(r"(?i)\s*work:\s*(.+)$", b.label)
+            if m:
+                rest = m.group(1).strip()
+                if not re.search(r"work:\s*" + re.escape(rest.lower()), low):
+                    b = planner.Block(b.start_min, b.end_min, rest, planner.categorise(rest))
+            out.append(b)
+        return out
 
     def _steps(self, day: date) -> str:
         """Anything he said at the 20-minute checks -- what he is mid-way through."""
@@ -160,19 +216,32 @@ class DayPlanner:
         lines = "\n".join(f"  {r['label']}: {r['answer']}" for r in rows)
         return f"WHERE HE LEFT OFF (his own words, at the last checks):\n{lines}\n\n"
 
-    async def build(self, day: date, text: str, now: datetime,
-                    tries: int = 2) -> tuple[list, str]:
-        """Returns (blocks, note). Raises planner.PlanError if it can't be made."""
+    async def build(self, day: date, text: str, now: datetime, tries: int = 2,
+                    current: str | None = None, change: str | None = None
+                    ) -> tuple[list, str]:
+        """Returns (blocks, note). Raises planner.PlanError if it can't be made.
+
+        With `current` and `change`, edits a plan he was already shown instead
+        of starting again.
+        """
         start = self.cfg.enforce_start_for(day)
         end = self.cfg.enforce_end_for(day)
         hhmm = lambda m: f"{m//60:02d}:{m%60:02d}"            # noqa: E731
         system = SYSTEM.format(name=self.cfg.user_name, start=hhmm(start), end=hhmm(end))
-        prompt = BUILD.format(
+        said = (text or "").strip()
+        common = dict(
             today=f"{now:%A %d %B %Y}", day=day.isoformat(), weekday=f"{day:%A}",
             start=hhmm(start), end=hhmm(end),
-            text=(text or "").strip() or "(nothing -- build the whole day from the agenda)",
             agenda=self.agenda.for_planner(now.date()) or "  (no big tasks saved)",
-            events=self._events(day), steps=self._steps(day), history=self._history(day))
+            events=self._events(day), chat=self._chat(now))
+        if current and change:
+            prompt = REVISE.format(current=current, change=change.strip(),
+                                   text=said or "(he asked you to build the day)", **common)
+        else:
+            prompt = BUILD.format(
+                text=said or "(nothing -- build the whole day from the agenda)",
+                steps=self._steps(day), **common)
+        his = "\n".join(x for x in (said, change or "") if x)
 
         error = None
         for attempt in range(tries):
@@ -182,6 +251,7 @@ class DayPlanner:
                                         schema=SCHEMA)
             try:
                 blocks, note = self._parse(raw)
+                blocks = self._keep_his_switch(blocks, his)
                 planner.validate_coverage(blocks, start, end)
                 return blocks, note
             except planner.PlanError as exc:

@@ -93,7 +93,7 @@ check("no buttons left", q.edited[1], None)
 print("\n=== telling Friday counts too ===")
 cfg, db, led, eng, bot = make(N(22, 5))
 
-async def fake(system, contents, now, max_tokens=400, schema=None):
+async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
     fake.system = system
     bot.coach._charge(now.date())
     return json.dumps({"reply": "clean 🙌", "actions": [

@@ -76,7 +76,7 @@ def model(bot, answers):
     """`answers` is a list: one reply per call, last one repeats."""
     seen = {"prompts": [], "n": 0}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["n"] += 1
         seen["prompts"].append("\n".join(str(c) for c in contents))
         seen["system"] = system
@@ -127,7 +127,7 @@ class Q:
 q = Q(f"plan:ok:{bot.pending[1]['id']}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
 check("it says so, naming the day", q.edited.startswith("locked in for"), True)
-check("and the plan is in the database", labels(db)[0], "work: physics IA")
+check("and the plan is in the database, with no work: he never wrote", labels(db)[0], "physics IA")
 check("covering the whole window",
       (db.blocks(DAY)[0]["start_min"], db.blocks(DAY)[-1]["end_min"]), (16 * 60, 22 * 60))
 check("he gets the confirmation", any("locked in for" in r for r in q.replies), True)
@@ -139,7 +139,7 @@ run(bot.cmd_plan(FakeUpdate("/plan\n" + HIS_MESSAGE), None))
 q = Q(f"plan:redo:{bot.pending[1]['id']}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
 check("nothing locked", labels(db), [])
-check("and he's asked what to change", "what to change" in q.edited, True)
+check("and he's asked what to change", "what do you want different" in q.edited, True)
 
 print("\n=== a plan with a hole in it is repaired, not shipped ===")
 cfg, db, led, eng, bot = make()
@@ -326,8 +326,8 @@ check("two proposals, two ids", first_id != second_id, True)
 q = Q(f"plan:ok:{first_id}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
 check("tapping the FIRST message locks the FIRST plan",
-      labels(db)[0], "work: physics IA")
-check("not the newer one", "work: IELTS speaking" in labels(db), False)
+      labels(db)[0], "physics IA")
+check("not the newer one", "IELTS speaking" in labels(db), False)
 check("and it says which day", "locked in for" in q.edited, True)
 
 q2 = Q(f"plan:ok:{first_id}")
@@ -342,7 +342,7 @@ pid = bot.pending[1]["id"]
 bot.pending.clear()                      # what a redeploy does to memory
 q = Q(f"plan:ok:{pid}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
-check("the plan is still there after the bot restarts", labels(db)[0], "work: physics IA")
+check("the plan is still there after the bot restarts", labels(db)[0], "physics IA")
 
 q = Q("plan:ok:9999")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))

@@ -438,11 +438,15 @@ class LockstepBot:
         self.db.ensure_day(target)
         self.db.set_goals(target, items)
         self.ledger.append("goals_set", {"date": target.isoformat(), "count": len(items)})
-        self.pending.pop(update.effective_chat.id, None)
+        held = self.pending.pop(update.effective_chat.id, None) or {}
+        then = (held.get("then_plan") if held.get("action") == "goals"
+                and held.get("date") == target else None)
         await update.message.reply_text(
             f"<b>{target:%A %d %B} is for:</b>\n\n{self._goals_text(target)}\n\n"
-            "Now the timetable — /plan.",
+            + ("locking the plan now 👇" if then else "Now the timetable — /plan."),
             parse_mode=ParseMode.HTML)
+        if then:
+            await self._accept_plan(update, target, then)
 
     async def cmd_done(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -692,12 +696,15 @@ class LockstepBot:
         # the day into a shape to be filled; writing the outcomes first makes
         # the timetable answer to something.
         if not self.db.goals(target):
+            # 21 Sep: he tapped lock, was asked for goals, sent them -- and the
+            # plan he had locked was gone. It waits here and goes in with them.
             lo, hi = self._goal_conf()
-            self.pending[update.effective_chat.id] = {"action": "goals", "date": target}
+            self.pending[update.effective_chat.id] = {"action": "goals", "date": target,
+                                                      "then_plan": text}
             await update.message.reply_text(
                 f"goals first bro. what are the <b>{lo}-{hi} things</b> "
                 f"{target:%A %d %B} is for?\n\n"
-                "one per line, then resend the plan.",
+                "one per line — the plan locks in right after.",
                 parse_mode=ParseMode.HTML)
             return
         # The TARGET day's window, not today's. A Saturday plan written on Friday
@@ -874,13 +881,18 @@ class LockstepBot:
     # building the day for him
     # ======================================================================
     async def _offer_built_plan(self, update: Update, day: date, text: str,
-                                now: datetime, why: str = "") -> bool:
-        """Build a plan from what he wrote and offer it. True if we handled it."""
+                                now: datetime, why: str = "", current: str | None = None,
+                                change: str | None = None) -> bool:
+        """Build a plan from what he wrote and offer it. True if we handled it.
+
+        With `current` and `change` it edits the plan he was just shown.
+        """
         if not self.coach.enabled or self.coach.budget_left(now.date()) <= 0:
             return False
         await update.message.chat.send_action("typing")
         try:
-            blocks, note = await self.dayplanner.build(day, text, now)
+            blocks, note = await self.dayplanner.build(day, text, now,
+                                                       current=current, change=change)
         except planner.PlanError as exc:
             log.info("could not build a plan: %s", exc)
             return False
@@ -890,7 +902,12 @@ class LockstepBot:
         rendered = "\n".join(f"{b.hhmm()} {b.label}" for b in blocks)
         pid = self.proposals.add(day, rendered, note, now)
         self.pending[update.effective_chat.id] = {
-            "action": "plan_proposal", "date": day, "text": rendered, "id": pid}
+            "action": "plan_proposal", "date": day, "text": rendered, "id": pid,
+            "ask": text}
+        # On the record, so Friday knows what he was shown when he answers it.
+        self.coach.remember(now.date(), now, "coach",
+                            f"[proposed plan #{pid} for {day:%a %d %b}, not locked yet]\n"
+                            f"{rendered}" + (f"\n{note}" if note else ""))
         when = "today" if day == now.date() else (
             "tomorrow" if day == now.date() + timedelta(days=1) else f"{day:%a %d %b}")
         await update.message.reply_text(
@@ -905,6 +922,22 @@ class LockstepBot:
 
     async def _chat_make_plan(self, update: Update, want: dict, now: datetime) -> None:
         """He asked Friday to build it. One day is offered; several are locked in."""
+        pend = self.pending.get(update.effective_chat.id) or {}
+        if pend.get("action") == "plan_proposal" and int(want.get("days") or 1) == 1:
+            said = str(want.get("day") or "").strip().lower()
+            same = (not said or (said.startswith("tod") and pend["date"] == now.date())
+                    or (said.startswith("tom")
+                        and pend["date"] == now.date() + timedelta(days=1))
+                    or said[:10] == pend["date"].isoformat())
+            if same:
+                change = str(want.get("text") or "").strip() or "make it better"
+                if not await self._offer_built_plan(
+                        update, pend["date"], pend.get("ask") or "", now,
+                        current=pend["text"], change=change):
+                    await update.message.reply_text(
+                        "couldn't make that change work — the one above still stands, "
+                        "or send the blocks yourself.")
+                return
         raw_day = str(want.get("day") or "tomorrow").strip().lower()
         if raw_day.startswith("tod"):
             day = now.date()
@@ -950,9 +983,13 @@ class LockstepBot:
             return
         if q.data.startswith("plan:redo"):
             self.proposals.use(row["id"], now)
-            if (self.pending.get(chat) or {}).get("id") == row["id"]:
-                self.pending.pop(chat, None)
-            await q.edit_message_text("ok, tell me what to change and I'll redo it.")
+            # Still waiting: his next message is the change, and it edits THIS
+            # plan rather than starting from nothing.
+            ask = (self.pending.get(chat) or {}).get("ask") or ""
+            self.pending[chat] = {"action": "plan_proposal",
+                                  "date": date.fromisoformat(row["date"]),
+                                  "text": row["text"], "id": None, "ask": ask}
+            await q.edit_message_text("ok, what do you want different?")
             return
         if row["used_at"]:
             await q.edit_message_text("that one's already locked in — /today to see it.")
@@ -963,7 +1000,18 @@ class LockstepBot:
         if (self.pending.get(chat) or {}).get("id") == row["id"]:
             self.pending.pop(chat, None)
         await q.edit_message_text(f"locked in for {day:%a %d %b} 🤝")
+        self.coach.remember(now.date(), now, "user", f"[tapped lock on plan #{row['id']}]")
         await self._accept_plan(_Reply(q, chat), day, row["text"])
+
+    async def _lock_proposal(self, update: Update, pend: dict) -> None:
+        """He said yes in words. Lock exactly what he was shown."""
+        now = self.cfg.now()
+        pid = pend.get("id")
+        self.pending.pop(update.effective_chat.id, None)
+        if pid and not self.proposals.use(pid, now):
+            await update.message.reply_text("that one's already locked in — /today to see it.")
+            return
+        await self._accept_plan(update, pend["date"], pend["text"])
 
     async def cmd_plandays(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/plan2 -- the next two days at once, built around the deadlines."""
@@ -1337,6 +1385,11 @@ class LockstepBot:
                     if b["start_min"] <= minute < b["end_min"]), None)
         if blk is None or (blk["category"] or "").lower() in su.skip_categories():
             return
+        # 21 Sep: the photo ask and the three questions landed in the same
+        # second, every 20 minutes. When a photo is due now, the questions
+        # ride along in that message instead (see _standup_rider).
+        if self._photo_due_near(day, blk["id"], now):
+            return
         every = su.every()
         since = minute - blk["start_min"]
         if since < every or since % every:
@@ -1347,6 +1400,52 @@ class LockstepBot:
             return
         n = su.ask(now, blk["label"])
         await self.send_user(su.question(n))
+
+    def _photo_due_near(self, day: date, block_id: int, now: datetime,
+                        minutes: int = 3) -> bool:
+        lo = (now - timedelta(minutes=minutes)).isoformat()
+        hi = (now + timedelta(minutes=minutes)).isoformat()
+        return self.db.one(
+            "SELECT 1 FROM checkpoints WHERE date=? AND block_id=? AND due_at BETWEEN ? AND ?"
+            " AND state IN ('scheduled','asked','overdue') LIMIT 1",
+            (day.isoformat(), block_id, lo, hi)) is not None
+
+    def _standup_rider(self, due: datetime, now: datetime) -> str:
+        """The 20-minute questions, to go inside the photo ask. '' if not due."""
+        su = self.standups
+        if not su.enabled:
+            return ""
+        day, minute = due.date(), due.hour * 60 + due.minute
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None or (blk["category"] or "").lower() in su.skip_categories():
+            return ""
+        since, every = minute - blk["start_min"], su.every()
+        if since < every or since % every:
+            return ""
+        if self.engine.debt_seconds(day, now) > 0:
+            return ""
+        if su.count_asked(day) >= int(su.conf.get("max_per_day", 24)):
+            return ""
+        if not self.db.claim(f"standup:{day}:{minute}"):
+            return ""
+        su.ask(now, blk["label"])
+        return ("and text me: what exactly are you on rn (which problem/page)? "
+                "moving fast or drifting? stuck on anything?")
+
+    def _ignored_streak(self, day: date, before: str) -> bool:
+        """The last two checks before this one both went unanswered.
+
+        21 Sep: seventeen asks and seventeen "where's the pic" in a row, each one
+        worded fresh by the model, spent a third of the day's allowance on
+        messages he was not reading. After two in a row the written line is
+        just as good, and the allowance stays for when he talks back.
+        """
+        rows = self.db.q(
+            "SELECT state FROM checkpoints WHERE date=? AND due_at < ?"
+            " AND state IN ('satisfied','missed','excused') ORDER BY due_at DESC LIMIT 2",
+            (day.isoformat(), before))
+        return len(rows) == 2 and all(r["state"] == "missed" for r in rows)
 
     async def cmd_paper(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE,
                         which: str | None = None) -> None:
@@ -2430,16 +2529,13 @@ class LockstepBot:
             await self._rewrite_reason(update, text)
             return
         if action == "plan_proposal":
-            # He answered the proposal with words instead of a button: treat
-            # them as the change he wants and build it again.
-            low = text.strip().lower()
-            day = pend["date"]
-            self.pending.pop(chat, None)
-            if low in ("ok", "yes", "yeah", "lock", "lock it", "да", "ok lock it"):
-                await self._accept_plan(update, day, pend["text"])
-                return
-            if await self._offer_built_plan(update, day, pend["text"] + "\n" + text,
-                                            self.cfg.now()):
+            # A plain yes locks it. Anything else -- a change, a question, "why
+            # sat first?" -- is read by Friday with the plan in front of her,
+            # and she decides: answer, edit, or lock.
+            low = text.strip().lower().strip(" .!👍")
+            if low in ("ok", "okay", "yes", "yeah", "yep", "lock", "lock it", "да",
+                       "ok lock it", "lock it in", "bet", "go", "good", "ок"):
+                await self._lock_proposal(update, pend)
                 return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
@@ -2501,6 +2597,14 @@ class LockstepBot:
         await update.message.chat.send_action("typing")
         try:
             note = self._reject_note(now)
+            waiting = self.pending.get(update.effective_chat.id) or {}
+            if waiting.get("action") == "plan_proposal":
+                note = (note + "\n" if note else "") + (
+                    f"PLAN IS WAITING for {waiting['date']:%a %d %b} -- you proposed it, "
+                    "he has NOT locked it yet:\n" + waiting["text"] + "\n"
+                    "If his message asks for any change to it, use make_plan with the "
+                    "change as text. If he's happy with it, use lock_plan. If he asks "
+                    "about it, answer from the plan above.")
             su = self.standups.pending(now) if self.standups.enabled else None
             if su is not None and not note:
                 from .coach import STANDUP_NOTE
@@ -2523,6 +2627,14 @@ class LockstepBot:
             if out:
                 await update.message.reply_text(out[:3900])
             await self.cmd_paper(update, None, which=paper)
+            return
+        lock, self.coach.last_lock_plan = self.coach.last_lock_plan, False
+        waiting = self.pending.get(update.effective_chat.id) or {}
+        if lock and waiting.get("action") == "plan_proposal" \
+                and self.coach.last_make_plan is None:
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self._lock_proposal(update, waiting)
             return
         want_plan, self.coach.last_make_plan = self.coach.last_make_plan, None
         if want_plan is not None:
@@ -2984,6 +3096,15 @@ class LockstepBot:
                     if kind.startswith("blocker") else
                     "a photo of his bed, opened, ready to sleep in" if kind == "bed" else
                     "a photo of him actually doing it, with a clock or timestamp in shot")
+            rider = (self._standup_rider(due, now)
+                     if kind == "activity" and not starting else "")
+            if rider:
+                body += "\n" + rider
+            if self._ignored_streak(due.date(), p["due_at"]):
+                await self.send_user(body)
+                self.ledger.append("checkpoint_asked",
+                                   {"checkpoint": p["checkpoint_id"], "kind": kind})
+                return
             body = await self._human(
                 "asking him for the proof photo for a block that is starting now"
                 if starting else
@@ -2993,7 +3114,10 @@ class LockstepBot:
                 + ("this is the start of the block\n" if starting
                    else "he is already in this block, this is a later check\n")
                 + ("no face, no logins, nothing showing where he lives\n"
-                   if kind == "activity" else ""),
+                   if kind == "activity" else "")
+                + (f"in the same message, also ask the 20-minute check: what exactly "
+                   f"he's on right now (the precise problem/page), whether he's moving "
+                   f"fast, and what he's stuck on. He answers in text.\n" if rider else ""),
                 body)
             await self.send_user(body)
             self.ledger.append("checkpoint_asked",
@@ -3013,6 +3137,14 @@ class LockstepBot:
             when = ("siren's on now, send it and it stops 🔊"
                     if wait <= 0 else
                     f"siren starts in {wait} min if it doesn't come")
+            cp = self.db.one("SELECT date, due_at FROM checkpoints WHERE id = ?",
+                             (int(p.get("checkpoint_id") or 0),))
+            if cp is not None and self._ignored_streak(
+                    date.fromisoformat(cp["date"]), cp["due_at"]):
+                await self.send_user(f"{prefix} for {what}? {when}")
+                self.ledger.append("checkpoint_overdue",
+                                   {"checkpoint": p["checkpoint_id"], "count": n})
+                return
             await self.send_user(await self._human(
                 "his time ran out and the photo never came -- the siren is on now"
                 if wait <= 0 else "his time ran out and the photo never came",

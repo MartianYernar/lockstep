@@ -90,17 +90,40 @@ HOW YOU TEXT
 - Only use numbers and facts from HIS DAY below. Never invent a day count, a
   streak, or anything about his past that isn't written there.
 
+HOW YOU THINK (this is what makes you worth talking to)
+- Read what he ACTUALLY asked or told you, and answer THAT first. If he asks
+  for something ("give me the plan", "what's next", "why sat first"), the
+  first thing in your reply is the answer or the action, not a nag.
+- Infer. He texts fast and half-finished: "the ia" is Physics IA, "3rd oct" is
+  the SAT, "extended to 8pm" means the deadline is today at 20:00. Work out
+  what he means from HIS DAY and the chat so far; don't make him spell it out,
+  and don't ask something the context already answers.
+- His NEWS beats the database. The database knows proof: photos, misses, what
+  was planned. It does NOT know the world. When he tells you a deadline moved,
+  a class got cancelled, an event changed -- that is newer than anything
+  below. Believe it, save it (set_due / add_event), and talk as if it's
+  already true. Never answer his news with the old value ("it's already a
+  day late") -- that's the dumbest thing a friend can do.
+- What the database DOES win on: whether he did the work. "I did 2 hours" with
+  no photos on record is still 0 proven hours -- say so if it matters.
+- Your reply and your actions go out together, so the reply must already
+  agree with the actions. If you set a new deadline, talk about the new one.
+- Think one step ahead for him: what's due soonest, what the next block is,
+  what's about to be a problem. Mention it only if it matters right now.
+
 WHAT YOU CAN'T DO
 You can't mark anything done, excuse a miss, or stop the siren. Only a photo
 does that. You CAN change his schedule when he asks (see below), but a change
 never cancels a pic that's already overdue. If he asks you to let him off, tell him you
 literally can't -- the pic is the only way. Never pretend you changed anything.
 
-HIS DAY, straight from the database (true, whatever he says):
+HIS DAY, straight from the database (the record of what he proved; his news
+about deadlines and events is newer):
 {context}
 
-If anything above says OVERDUE, mention it first, short and friendly, like a
-friend nudging him ("send the pic first bro, then we talk"). Keep the rest short."""
+If something above says OVERDUE, work it in -- one short line, and name the
+real thing he owes (a plan is not a photo). But answer his actual message
+first; a nag instead of an answer makes you useless."""
 
 BREAKDOWN = """Break this task into {lo}-{hi} concrete steps.
 
@@ -140,6 +163,7 @@ class Coach:
         self.last_judge_was_reason = True
         self.last_latenight: str | None = None
         self.last_make_plan: dict | None = None
+        self.last_lock_plan = False
         self.last_on_paper: str | None = None
 
     # -- config ---------------------------------------------------------------
@@ -151,21 +175,35 @@ class Coach:
     def enabled(self) -> bool:
         return bool(self.conf.get("enabled", True))
 
-    def _models(self) -> list[str]:
-        """Prefer a model the camera reaches last, so they rarely collide.
+    def _models(self, tier: str = "smart") -> list[str]:
+        """Which models a call may use, strongest first.
 
-        The vision chain is tried in order, so its FIRST entry is the one under
-        real pressure. Taking from the back means the coach is spending an
-        allowance vision only ever gets to after three others are exhausted.
+        "smart" is for anything that has to understand him: chat, building a
+        plan, judging a reason. It leads with the one full model in the chain.
+        "cheap" is for the bot's own nags, briefs and check-ins, and never
+        touches that model.
+
+        21 Sep: 86 calls by the evening, most of them wording nags he never
+        answered. That emptied the full model's daily allowance, so when he
+        actually talked to Friday he got a lite model -- which is why it told
+        him his IA was "a day late" a sentence after he said the deadline had
+        moved. The nags were spending the brain on the mouth.
+
+        Both tiers still start from the back of the vision chain, so the
+        camera's first choice is the last thing either of them touches.
         """
-        named = self.conf.get("models")
+        named = self.conf.get(f"{tier}_models") or (
+            self.conf.get("models") if tier == "smart" else None)
         if named:
             return list(named)
         g = self.cfg.raw["gemini"]
         chain = list(g.get("models") or [])
         if not chain and g.get("model"):
             chain = [g["model"]]
-        return list(reversed(chain)) or ["gemini-3.6-flash"]
+        order = list(reversed(chain)) or ["gemini-3.6-flash"]
+        if tier == "cheap" and len(order) > 1:
+            return order[1:]
+        return order
 
     # -- the daily allowance --------------------------------------------------
     def spent(self, day: date) -> int:
@@ -240,12 +278,20 @@ class Coach:
 
         debt = self.engine.debt_seconds(day, now)
         if debt > 0:
-            cp = self.engine.current_checkpoint(day, now)
-            what = (f" for the block \"{cp['label']}\" (due {cp['due_at'][11:16]})"
-                    if cp is not None and cp["label"] else "")
-            out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind. "
-                       f"The siren is going. He owes a photo{what}. When you mention "
-                       f"it, name that block so he knows which pic. **")
+            # 21 Sep, 16:17: no plan was locked yet, and Friday told him to send
+            # "the pic for physics ia" -- a photo nothing was asking for. Say
+            # what the siren actually wants.
+            if not self.engine.has_plan(day):
+                out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind because "
+                           "TODAY HAS NO LOCKED PLAN. The siren wants a plan, not a "
+                           "photo -- a locked plan is what stops it. **")
+            else:
+                cp = self.engine.current_checkpoint(day, now)
+                what = (f" for the block \"{cp['label']}\" (due {cp['due_at'][11:16]})"
+                        if cp is not None and cp["label"] else "")
+                out.append(f"** OVERDUE RIGHT NOW: {debt // 60} minutes behind. "
+                           f"The siren is going. He owes a photo{what}. When you mention "
+                           f"it, name that block so he knows which pic. **")
 
         terms = self.terms.all()
         if terms:
@@ -304,7 +350,8 @@ class Coach:
 
     # -- the call itself ------------------------------------------------------
     async def _ask(self, system: str, contents: list, now: datetime,
-                   max_tokens: int = 400, schema: dict | None = None) -> str:
+                   max_tokens: int = 400, schema: dict | None = None,
+                   tier: str = "smart") -> str:
         from google.genai import types
         if self._client is None:
             from google import genai
@@ -314,20 +361,27 @@ class Coach:
         if schema is not None:
             extra = {"response_mime_type": "application/json", "response_schema": schema}
 
+        # The smart tier is allowed to think before it answers. "He said the
+        # deadline moved, so it's due tonight, not overdue" is one step of
+        # reasoning, and with thinking switched off the model skipped it.
+        # Thinking is paid in tokens, not requests -- the free tier's limit
+        # is requests -- so on the calls that matter it is nearly free.
+        budget = int(self.conf.get("smart_thinking", 1024)) if tier == "smart" else 0
+
         def config(with_thinking: bool):
-            more = ({"thinking_config": types.ThinkingConfig(thinking_budget=0)}
+            more = ({"thinking_config": types.ThinkingConfig(thinking_budget=budget)}
                     if with_thinking else {})
             return types.GenerateContentConfig(
                 system_instruction=system,
                 temperature=float(self.conf.get("temperature", 0.7)),
-                max_output_tokens=max_tokens,
+                max_output_tokens=max_tokens + (budget if with_thinking else 0),
                 **extra, **more,
             )
 
         last: Exception | None = None
-        for model in self._models():
-            # Thinking off first (cheaper); some models reject that with a
-            # 400, so the same model is asked again without it.
+        for model in self._models(tier):
+            # The configured thinking first; some models reject the setting
+            # with a 400, so the same model is asked again without it.
             for with_thinking in (True, False):
                 try:
                     resp = await self._client.aio.models.generate_content(
@@ -453,6 +507,8 @@ class Coach:
         self.last_on_paper = (op[0].get("text") or "").strip() if op else None
         mp = [a for a in actions if isinstance(a, dict) and a.get("type") == "make_plan"]
         self.last_make_plan = mp[0] if mp else None
+        self.last_lock_plan = any(isinstance(a, dict) and a.get("type") == "lock_plan"
+                                  for a in actions)
         ln = [a for a in actions if isinstance(a, dict) and a.get("type") == "start_latenight"]
         self.last_latenight = (ln[0].get("text") or "").strip() if ln else None
         rc = [a for a in actions if isinstance(a, dict) and a.get("type") == "recheck_photo"]
@@ -568,7 +624,7 @@ class Coach:
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
                 elif kind not in ("edit_plan", "recheck_photo", "start_latenight",
-                                  "make_plan", "on_paper"):
+                                  "make_plan", "on_paper", "lock_plan"):
                     done.append(f"⚠️ didn't know what to do with \"{kind}\"")
             except (ValueError, TypeError) as exc:
                 log.warning("coach action %s failed: %s", kind, exc)
@@ -604,7 +660,7 @@ class Coach:
         """A friend texting halfway through a block: how's it going."""
         return await self._ask(
             SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            [CHECKIN.format(label=block["label"])], now, max_tokens=120)
+            [CHECKIN.format(label=block["label"])], now, max_tokens=120, tier="cheap")
 
     async def say(self, job: str, facts: str, now: datetime,
                   max_tokens: int = 120) -> str:
@@ -618,41 +674,14 @@ class Coach:
         """
         return await self._ask(
             SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
-
-    async def say(self, job: str, facts: str, now: datetime,
-                  max_tokens: int = 120) -> str:
-        """One short message, in his voice, carrying these facts.
-
-        The bot used to send fixed strings for this -- "your phone hasn't
-        checked in for 1065 min, press Start on both flows" -- and they read
-        like a machine because they were one. The facts are the same either
-        way; who says them is the difference. Every caller keeps a written
-        fallback for when there is no allowance left or the model is down.
-        """
-        return await self._ask(
-            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
-
-    async def say(self, job: str, facts: str, now: datetime,
-                  max_tokens: int = 120) -> str:
-        """One short message, in his voice, carrying these facts.
-
-        The bot used to send fixed strings for this -- "your phone hasn't
-        checked in for 1065 min, press Start on both flows" -- and they read
-        like a machine because they were one. The facts are the same either
-        way; who says them is the difference. Every caller keeps a written
-        fallback for when there is no allowance left or the model is down.
-        """
-        return await self._ask(
-            SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens)
+            [SAY.format(job=job, facts=facts)], now, max_tokens=max_tokens,
+            tier="cheap")
 
     async def brief(self, now: datetime) -> str:
         """Before the window opens: what's on his plate, in a couple of lines."""
         return await self._ask(
             SYSTEM.format(name=self.cfg.user_name, context=self.context(now)),
-            [BRIEF], now, max_tokens=220)
+            [BRIEF], now, max_tokens=220, tier="cheap")
 
 
 # --------------------------------------------------------------------------
@@ -691,6 +720,12 @@ actually told you, never guessed:
   "rest plan yourself"). Put whatever he fixed in "text", word for word, and
   the app builds the rest around his deadlines. Use days:2 or 3 if he asked
   for more than one day. Don't write the blocks yourself in this case.
+  If a PLAN IS WAITING (see the notes below) and he wants something in it
+  changed ("swap sat and ia", "no math tonight", "dinner at 8"), use make_plan
+  for that day with "text" = exactly the change he asked for. The app edits
+  the waiting plan; it doesn't start over.
+- {"type":"lock_plan"}  ONLY when a PLAN IS WAITING and he says it's good /
+  lock it / go / ok. The app locks exactly the plan he was shown.
 - {"type":"edit_plan","day":"today" or "tomorrow","plan":"HH:MM-HH:MM label\n..."}
   when he asks you to change his schedule. Write the WHOLE new plan, one block
   per line: for today, from the block he's in now to the end of the window;
@@ -719,7 +754,7 @@ REPLY_SCHEMA = {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
                     "edit_plan", "define", "recheck_photo", "tick_basic",
-                    "start_latenight", "make_plan", "on_paper"]},
+                    "start_latenight", "make_plan", "on_paper", "lock_plan"]},
                 "days": {"type": "INTEGER"},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
@@ -816,34 +851,6 @@ Judge the answer like a friend who can tell the difference:
 - If he's been saying the same thing for two or three checks in a row, say so
   plainly ("that's the third check on the same paragraph bro").
 Keep it to one or two sentences either way."""
-
-
-SAY = """Text him now about this. You are starting the conversation, he has not
-just written to you.
-
-WHAT THIS IS ABOUT: {job}
-
-THE FACTS -- all true, use what matters and drop the rest:
-{facts}
-
-One or two short lines, the way you actually text. No lists, no headings, no
-sign-off. Keep every number and name that matters (the block, the minutes, the
-app to open) -- he has to know what to do. Don't invent anything that isn't in
-the facts, and don't promise to change anything."""
-
-
-SAY = """Text him now about this. You are starting the conversation, he has not
-just written to you.
-
-WHAT THIS IS ABOUT: {job}
-
-THE FACTS -- all true, use what matters and drop the rest:
-{facts}
-
-One or two short lines, the way you actually text. No lists, no headings, no
-sign-off. Keep every number and name that matters (the block, the minutes, the
-app to open) -- he has to know what to do. Don't invent anything that isn't in
-the facts, and don't promise to change anything."""
 
 
 SAY = """Text him now about this. You are starting the conversation, he has not

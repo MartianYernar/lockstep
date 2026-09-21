@@ -54,7 +54,7 @@ def make():
 
 
 def model(bot, actions, reply="got them saved"):
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         fake.system = system
         bot.coach._charge(now.date())
         return json.dumps({"reply": reply, "actions": actions})

@@ -77,7 +77,7 @@ def make(now, checker=None):
 def model(bot, reply):
     seen = {"notes": []}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["notes"].append(system)
         bot.coach._charge(now.date())
         return reply

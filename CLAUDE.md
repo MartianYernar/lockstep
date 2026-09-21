@@ -76,6 +76,15 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   before each deadline. A built plan is proposed with a button, never written
   silently, and it goes through the same coverage check and the same rewrite
   guard as a typed one. Two attempts, the second one quoting the rejection.
+  A reply to a waiting proposal goes to Friday with the plan in view; a change
+  is an edit of THAT plan (`REVISE`), not a rebuild from it. "work:" on a
+  built block survives only if he typed it (`_keep_his_switch`) -- it decides
+  what proof he owes, so the model does not get to choose it.
+- **Friday thinks; nags don't.** Chat, the replan judge and the planner run
+  on the smart tier (strongest model, thinking on). Worded nags run on the
+  cheap tier, and after two ignored checks in a row the written line goes out
+  with no model call at all. His news (a moved deadline) beats the database;
+  proof never does.
 - **Hours done means hours proven.** `Agenda.hours_done` counts satisfied
   checkpoints inside blocks matching a task, one proof interval each, capped at
   the block. Planning a block buys nothing. That number is what `/forecast`,

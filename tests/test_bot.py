@@ -446,11 +446,10 @@ u2 = FakeUpdate("finish pset ch3\nessay draft\ngym")
 run(bot.on_text(u2, None))
 check("goals accepted", len(db.goals(target)), 3)
 check("pending cleared", USER in bot.pending, False)
-check("told to send the plan next", "/plan" in u2.message.last, True)
-
-u3 = FakeUpdate("/plan\n" + GOOD)
-run(bot.cmd_plan(u3, None))
-check("plan now accepted", "locked in" in u3.message.last.lower(), True)
+# 21 Sep: he locked a plan, was asked for goals, sent them -- and the plan he
+# had locked never went in. It waits for the goals now, and goes in with them.
+check("the plan he sent goes in with the goals", len(db.blocks(target)) > 0, True)
+check("and he is told it's locked", "locked in" in u2.message.last.lower(), True)
 
 print("\n=== too few and too many are both refused ===")
 cfg, db, led, eng, lk, bot, val = make()

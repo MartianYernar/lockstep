@@ -85,7 +85,7 @@ def make(now):
 def model(bot, chat=None, judge=None):
     seen = {"systems": []}
 
-    async def fake(system, contents, now, max_tokens=400, schema=None):
+    async def fake(system, contents, now, max_tokens=400, schema=None, tier=None):
         seen["systems"].append(system)
         bot.coach._charge(now.date())
         if schema is JUDGE_SCHEMA:
