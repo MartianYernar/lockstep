@@ -76,7 +76,7 @@ be asking me for anything?* If not, silence costs nothing.
 - Formula (paste it exactly, brackets and all):
 
   ```
-  (resp != "-1") && ((((dateParts()[3] * 60) + dateParts()[4]) >= (((dateParts()[7] = 0) || (dateParts()[7] = 6)) ? 600 : 970)) && (((dateParts()[3] * 60) + dateParts()[4]) < 1320))
+  (resp != "-1") && ((((dateParts()[3] * 60) + dateParts()[4]) >= (((dateParts()[7] = 0) || (dateParts()[7] = 6)) ? 600 : 1020)) && (((dateParts()[3] * 60) + dateParts()[4]) < 1320))
   ```
 
 - `YES` → block 4 (siren, as before). `NO` → **block 7** (quiet minute, then try the network again)
@@ -91,12 +91,12 @@ compare cleanly:
 | number | means |
 |---|---|
 | `600` | 10:00 — weekend window opens |
-| `970` | 16:10 — weekday window opens |
+| `1020` | 17:00 — weekday window opens |
 | `1320` | 22:00 — both windows close |
 
 | | offline siren | silent |
 |---|---|---|
-| Mon–Fri | 16:10 – 22:00 | 22:00 – 16:10 |
+| Mon–Fri | 17:00 – 22:00 | 22:00 – 17:00 |
 | Sat, Sun | 10:00 – 22:00 | 22:00 – 10:00 |
 
 **These three numbers duplicate `enforce_start`, `enforce_end` and `weekend` in
@@ -153,7 +153,7 @@ house on a weekday morning kills the connection, and 07:20 was inside the allowe
 zone, so walking to school set off the siren.
 
 Being offline is only suspicious when the server has something to ask for. Before
-16:10 on a weekday it has nothing, so an unreachable phone means nothing either.
+17:00 on a weekday it has nothing, so an unreachable phone means nothing either.
 Matching the enforcement window fixes the morning and the 3 a.m. router drop with
 the same test.
 
@@ -284,7 +284,7 @@ If you ever depend on it, check its Log first.
 ## Testing
 
 1. Send `/testsiren` to the bot. The phone should sound within about 10 seconds.
-2. **The test that matters:** *inside the window* (a weekday after 16:10), turn wifi
+2. **The test that matters:** *inside the window* (a weekday after 17:00), turn wifi
    off for five minutes. You should get a siren about every 10 seconds the whole
    time. When you turn it back on, the flow should carry on by itself and its Log
    should **not** say *Stopped by failure*.
