@@ -41,9 +41,11 @@ the planned one.
 
 | thing | value |
 |---|---|
-| host | Railway (hobby) |
-| project | `lockstep`, environment `production` |
-| region/workspace | Yernar's Projects |
+| host | Railway |
+| account | `<second-account-email>` (the first one, `<first-account-email>`, had its trial expire on 8 Oct 2026 and still holds the old volume) |
+| project | `lockstep`, environment `production`, workspace `My Projects` |
+| url | `https://<your-app>.up.railway.app` |
+| builder | the service variable `RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile` — without it Railway auto-detects Python and fails with "no start command" |
 | image | `deploy/Dockerfile`, `python:3.12-slim` |
 | entrypoint | `python -m server.main` |
 | port | 8765 in the Dockerfile; the running container logs the live one |
@@ -51,6 +53,30 @@ the planned one.
 | on the volume | `config.yaml`, `lockstep.db` (+ `-wal`, `-shm`), `why.md` |
 | env in the image | `LOCKSTEP_DB=/data/lockstep.db`, `LOCKSTEP_CONFIG=/data/config.yaml` |
 | healthcheck | `GET /health` every 60s |
+
+**First boot on a fresh host.** A volume can only be written to while a
+deployment is running, and the app will not start without `/data/config.yaml` —
+a deadlock that cost an evening on 9 Oct 2026. The way out is the service
+variable `LOCKSTEP_CONFIG_B64`: base64 of the whole config file. `main._seed_config`
+writes it to the volume on the first boot only, and never touches the file
+again, so later edits on the volume stand.
+
+```bash
+railway init -n lockstep && railway add -s lockstep
+railway volume add -m /data
+railway variables --set "LOCKSTEP_CONFIG_B64=$(base64 -w0 config.yaml)"
+railway variables --set "RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile"
+railway up --ci
+railway domain                     # then put the URL in the phone's block 2
+```
+
+`LOCKSTEP_BOT_TOKEN`, `LOCKSTEP_GEMINI_KEY` and `LOCKSTEP_API_TOKEN` also
+override their config values if you would rather keep those three out of the
+file.
+
+**A fresh database starts unarmed:** no guardian, no commitment, lock not
+started. Dad messages the bot, you send `/setguardian <his id>`, he sends
+`/commit <months>`. Until then nothing is enforced.
 
 **Deploying:** from the repo root, `railway up --ci`. It builds the image, pushes
 it and restarts the container — a few seconds of downtime, no data loss, because

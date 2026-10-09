@@ -23,7 +23,28 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("lockstep")
 
 
+def _seed_config(path: str | None) -> None:
+    """Write the config on first boot from LOCKSTEP_CONFIG_B64, if it is missing.
+
+    A fresh host has an empty volume, and the app cannot start without a
+    config -- but a volume can only be written to while something is running.
+    9 Oct 2026 that deadlock is what stood between a dead bot and a live one.
+    So the whole config can live in one base64 environment variable: the first
+    boot writes it to the volume, every later boot finds the file and leaves
+    it alone, so edits made on the volume are never clobbered.
+    """
+    import base64
+    blob = os.environ.get("LOCKSTEP_CONFIG_B64")
+    if not path or not blob or os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(base64.b64decode(blob))
+    log.info("seeded %s from LOCKSTEP_CONFIG_B64 (first boot)", path)
+
+
 def main() -> None:
+    _seed_config(os.environ.get("LOCKSTEP_CONFIG"))
     cfg = Config.load(os.environ.get("LOCKSTEP_CONFIG"))
     db = Database(os.environ.get("LOCKSTEP_DB") or os.path.join(ROOT, "lockstep.db"))
     ledger = Ledger(db)
