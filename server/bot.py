@@ -210,6 +210,9 @@ class LockstepBot:
         """Inline buttons: ticking off a goal, or a step of a block."""
         q = update.callback_query
         await q.answer()
+        chat = q.message.chat.id if getattr(q, "message", None) else None
+        if chat is not None and chat != self.cfg.user_chat_id:
+            return
         if q.data.startswith("step:"):
             await self._on_step_button(q)
             return
@@ -314,6 +317,8 @@ class LockstepBot:
             reply_markup=self._keyboard(update))
 
     async def cmd_status(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
         now = self.cfg.now()
         today = now.date()
         row = self.db.lock()
@@ -1706,6 +1711,8 @@ class LockstepBot:
             parse_mode=ParseMode.HTML)
 
     async def cmd_reminders(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
         now = self.cfg.now()
         rows = self.db.q("SELECT * FROM reminders WHERE at_ts >= ? ORDER BY at_ts",
                          (now.isoformat(),))
@@ -1779,6 +1786,8 @@ class LockstepBot:
         await self.send_user("🔒 your dad closed the blocker again.")
 
     async def cmd_today(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
         now = self.cfg.now()
         today = now.date()
         if not self.engine.has_plan(today):
@@ -1866,6 +1875,8 @@ class LockstepBot:
         return body.strip() or None
 
     async def cmd_why(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
         why = self._why_text()
         if not why:
             await update.message.reply_text(
@@ -2267,6 +2278,8 @@ class LockstepBot:
         await self.send_user(f"Commitment extended by {months} months — to <b>{end}</b>.")
 
     async def cmd_report(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._is_user(update):
+            return
         await update.message.reply_text(self._report_text(self.cfg.now().date()),
                                         parse_mode=ParseMode.HTML)
 

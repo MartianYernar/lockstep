@@ -135,7 +135,7 @@ print("=== 16:07: his news outranks the database ===")
 cfg, db, led, eng, bot = make(N(16, 7))
 ctx = bot.coach.context(N(16, 7))
 check("the old deadline is shown with its date, so news can replace it",
-      "OVERDUE (was due 2026-09-20)" in ctx, True)
+      "OVERDUE (was due Sun 20 Sep)" in ctx, True)
 from server.coach import SYSTEM  # noqa: E402
 check("Friday is told his news beats the database", "His NEWS beats the database" in SYSTEM, True)
 check("and never to answer news with the old value", "already a" in SYSTEM, True)

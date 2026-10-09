@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS coach_log (
 );
 CREATE INDEX IF NOT EXISTS idx_coachlog_date ON coach_log(date);
 
+-- What he has told Friday that is true beyond today and is not a task or an
+-- event: "IELTS exam is 18 Oct", "I submitted the IA", "mum's birthday
+-- Friday". 22 Sep the chat only ever saw today's last ten messages, so at
+-- 08:48 nothing from the night before existed. This is the part that lasts.
+CREATE TABLE IF NOT EXISTS memories (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    active     INTEGER NOT NULL DEFAULT 1
+);
+
 -- One row per day: how much quota the coach has spent. The camera must never
 -- go hungry because he felt chatty.
 CREATE TABLE IF NOT EXISTS coach_budget (
@@ -293,6 +304,14 @@ class Coach:
                            f"The siren is going. He owes a photo{what}. When you mention "
                            f"it, name that block so he knows which pic. **")
 
+        mem = self.db.q("SELECT id, text, created_at FROM memories WHERE active = 1"
+                        " ORDER BY id DESC LIMIT 40")
+        if mem:
+            out.append("WHAT YOU KNOW ABOUT HIM (long-term memory, true until he says "
+                       "otherwise -- use it, don't re-ask it):")
+            for m in reversed(mem):
+                out.append(f"  m{m['id']} ({m['created_at'][:10]}): {m['text']}")
+
         terms = self.terms.all()
         if terms:
             out.append("His shorthand: " + "; ".join(
@@ -464,10 +483,16 @@ class Coach:
         return steps
 
     # -- talking --------------------------------------------------------------
-    def history(self, day: date, limit: int = 10) -> list:
+    def history(self, day: date, limit: int = 16) -> list:
+        """The recent conversation, across midnight.
+
+        It used to be today's rows only, so every morning Friday woke up with
+        no idea what was said at 23:00.
+        """
+        from datetime import timedelta
         rows = self.db.q(
-            "SELECT role, text FROM coach_log WHERE date = ? ORDER BY id DESC LIMIT ?",
-            (day.isoformat(), limit))
+            "SELECT role, text FROM coach_log WHERE date >= ? ORDER BY id DESC LIMIT ?",
+            ((day - timedelta(days=1)).isoformat(), limit))
         return list(reversed(rows))
 
     def remember(self, day: date, now: datetime, role: str, text: str) -> None:
@@ -494,7 +519,7 @@ class Coach:
         ctx = self.context(now) + (("\n" + note) if note else "")
         raw = await self._ask(
             SYSTEM.format(name=self.cfg.user_name, context=ctx) + ACTIONS,
-            contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)) + 200,
+            contents, now, max_tokens=int(self.conf.get("max_reply_tokens", 400)) + 600,
             schema=REPLY_SCHEMA)
         say, actions = _parse_reply(raw)
         # Schedule changes are not ours to make. They go back to the bot, which
@@ -516,9 +541,44 @@ class Coach:
         saved = self.apply(actions, now)
         if saved:
             say = (say + "\n\n" if say else "") + "\n".join(f"📌 {x}" for x in saved)
+        # A list he asks for comes from the database, never from the model's
+        # memory of it: 22 Sep it dropped half the tasks and cut off mid-JSON.
+        shows = [a for a in actions if isinstance(a, dict) and a.get("type") == "show_list"]
+        if shows:
+            say = (say + "\n\n" if say else "") + self.render_list(
+                (shows[0].get("text") or "all").strip().lower(), now)
         self.remember(day, now, "user", text)
         self.remember(day, now, "coach", say)
         return say
+
+    def render_list(self, scope: str, now: datetime) -> str:
+        """His tasks and events, numbered, exactly as stored."""
+        from datetime import timedelta
+        day = now.date()
+        parts = []
+        if not scope.startswith("event"):
+            rows = self.tasks.open()
+            lines = []
+            for r in rows:
+                bit = ""
+                if r["due"]:
+                    d = date.fromisoformat(r["due"])
+                    left = (d - day).days
+                    bit = (f" — OVERDUE ({d:%a %d %b})" if left < 0 else
+                           " — due TODAY" if left == 0 else
+                           " — due tomorrow" if left == 1 else
+                           f" — due {d:%a %d %b} ({left}d)")
+                lines.append(f"#{r['id']} {r['title']}{bit}")
+            parts.append(f"📋 tasks ({len(rows)}):\n" + ("\n".join(lines) or "none"))
+        if not scope.startswith("task"):
+            ev = self.db.q(
+                "SELECT at_ts, text FROM reminders WHERE at_ts >= ? AND at_ts < ?"
+                " ORDER BY at_ts LIMIT 30",
+                (now.isoformat(), (now + timedelta(days=60)).isoformat()))
+            lines = [f"{datetime.fromisoformat(e['at_ts']):%a %d %b %H:%M} — {e['text']}"
+                     for e in ev]
+            parts.append(f"📅 events ({len(ev)}):\n" + ("\n".join(lines) or "none coming up"))
+        return "\n\n".join(parts)
 
     def apply(self, actions: list, now: datetime) -> list[str]:
         """Carry out what the model asked for, and account for every one.
@@ -559,11 +619,35 @@ class Coach:
                     tid = self.tasks.add(title, now, due=due)
                     done.append(f"new task #{tid}: {title}"
                                 + (f" (due {due:%d %b})" if due else ""))
-                elif kind in ("complete_task", "set_due", "add_note"):
+                elif kind in ("complete_task", "set_due", "add_note", "rename_task",
+                              "drop_task"):
                     who = (a.get("task") or "").strip()
-                    t = self.tasks.find(who.lstrip("#"))
+                    t = self.tasks.find(who)
+                    if t is None and kind in ("complete_task", "drop_task"):
+                        gone = self.tasks.find(who, status="any")
+                        if gone is not None and gone["status"] != "open":
+                            done.append(f"{gone['title']} was already closed")
+                            continue
                     if t is None:
                         done.append(f"⚠️ couldn't find a task called \"{who}\" — which one?")
+                        continue
+                    if kind == "rename_task":
+                        new = (a.get("title") or a.get("text") or "").strip()
+                        twin = next((r for r in self.tasks.open() if r["id"] != t["id"]
+                                     and r["title"].strip().lower() == new.lower()), None)
+                        if twin is not None:
+                            # Renaming onto one he already has: that's one task, not two.
+                            self.tasks.close(t["id"], now, status="dropped")
+                            done.append(f"merged #{t['id']} {t['title']} into "
+                                        f"#{twin['id']} {twin['title']}")
+                        elif self.tasks.rename(t["id"], new):
+                            done.append(f"renamed #{t['id']}: {t['title']} → {new}")
+                        else:
+                            done.append(f"⚠️ what should #{t['id']} {t['title']} be called?")
+                        continue
+                    if kind == "drop_task":
+                        self.tasks.close(t["id"], now, status="dropped")
+                        done.append(f"removed: {t['title']}")
                         continue
                     if kind == "complete_task":
                         if self.tasks.close(t["id"], now):
@@ -623,8 +707,21 @@ class Coach:
                     self.db.run("INSERT INTO reminders (at_ts, text, created_at)"
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
+                elif kind == "remember":
+                    what = (a.get("text") or "").strip()
+                    if not what:
+                        continue
+                    if self.db.one("SELECT 1 FROM memories WHERE active=1 AND lower(text)=lower(?)",
+                                   (what,)):
+                        continue
+                    self.db.run("INSERT INTO memories (text, created_at) VALUES (?, ?)",
+                                (what[:300], now.isoformat()))
+                elif kind == "forget":
+                    ref = (a.get("task") or a.get("text") or "").strip().lower().lstrip("m#")
+                    if ref.isdigit():
+                        self.db.run("UPDATE memories SET active=0 WHERE id=?", (int(ref),))
                 elif kind not in ("edit_plan", "recheck_photo", "start_latenight",
-                                  "make_plan", "on_paper", "lock_plan"):
+                                  "make_plan", "on_paper", "lock_plan", "show_list"):
                     done.append(f"⚠️ didn't know what to do with \"{kind}\"")
             except (ValueError, TypeError) as exc:
                 log.warning("coach action %s failed: %s", kind, exc)
@@ -695,9 +792,25 @@ actually told you, never guessed:
   exam, appointment, anything at a set time. If the date or time is unclear,
   don't save it -- ask him.
 - {"type":"add_task","title":...,"date":"YYYY-MM-DD" or ""}  a new big task
-- {"type":"complete_task","task":"#id or title"}  he finished one
-- {"type":"set_due","task":"#id or title","date":"YYYY-MM-DD"}  its deadline
-- {"type":"add_note","task":"#id or title","text":...}  progress he described
+- {"type":"complete_task","task":"#id"}  he finished, submitted, handed in or
+  is done with one. When he names several ("submitted the IA and DS IA, рнкп
+  done"), one action EACH. Use his shorthand list above to map words to tasks.
+- {"type":"rename_task","task":"#id","title":"new name"}  he wants a task
+  reworded or changed ("change rec to get 2 rec letters"). NEVER add_task for
+  this -- that makes a duplicate.
+- {"type":"drop_task","task":"#id"}  he wants one off the list without doing it.
+- {"type":"set_due","task":"#id","date":"YYYY-MM-DD"}  its deadline
+- {"type":"add_note","task":"#id","text":...}  progress he described
+  For "task", write the #id number from the list above ("#12"), nothing else.
+- {"type":"show_list","text":"tasks" / "events" / "all"}  whenever he asks to
+  see his to-do list, tasks, events, deadlines or "everything". The app
+  appends the real list from the database. Your reply is ONE short line
+  ("here's everything:") -- never write the list yourself.
+- {"type":"remember","text":"one plain fact"}  anything lasting he tells you
+  that is not a task or an event: an exam date, what he submitted, a
+  preference, a person, how his school works. Short, in your words, dated
+  facts with the date. Don't remember what's already a task or event.
+- {"type":"forget","text":"m12"}  a memory above turned out wrong or old.
 - {"type":"start_latenight","text":"the reason, in his words"}  when it's past
   bedtime (BEDTIME below) and he says he has a real deadline or is out with
   friends. The app then asks him for a photo showing it; that buys 2 hours,
@@ -754,7 +867,8 @@ REPLY_SCHEMA = {
                 "type": {"type": "STRING", "enum": [
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
                     "edit_plan", "define", "recheck_photo", "tick_basic",
-                    "start_latenight", "make_plan", "on_paper", "lock_plan"]},
+                    "start_latenight", "make_plan", "on_paper", "lock_plan",
+                    "rename_task", "drop_task", "show_list", "remember", "forget"]},
                 "days": {"type": "INTEGER"},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},
@@ -824,12 +938,28 @@ def _date(v):
 
 
 def _parse_reply(raw: str) -> tuple[str, list]:
-    """The JSON the model was asked for -- or, if it ignored that, its text."""
+    """The JSON the model was asked for -- or, if it ignored that, its text.
+
+    22 Sep 08:58 a reply was cut off mid-JSON and he got `{ "reply": ...` as
+    the message. Broken JSON is never shown: the reply is dug out of it, and
+    if even that fails he gets a plain line.
+    """
     import json
+    import re
     try:
         data = json.loads(raw)
     except (ValueError, TypeError):
-        return (raw or "").strip(), []
+        text = (raw or "").strip()
+        if not text.startswith("{") and '"reply"' not in text:
+            return text, []
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', text, re.S)
+        if m:
+            try:
+                said = json.loads('"' + m.group(1) + '"')
+            except ValueError:
+                said = m.group(1).replace('\\n', '\n').replace('\\"', '"')
+            return said.strip(), []
+        return "sorry bro, my answer got cut off — say that again?", []
     if not isinstance(data, dict):
         return str(data), []
     acts = data.get("actions") or []

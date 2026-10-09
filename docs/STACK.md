@@ -71,7 +71,10 @@ railway up --ci                    # the config is read at startup only
 Without the `-wal` file you are reading yesterday's data.
 
 **Outside services it talks to:**
-- **Telegram Bot API** — the only interface. Proof photos in, nags and Friday out.
+- **Telegram Bot API** — the only interface. Proof photos in, nags and Friday
+  out. Every command checks the sender's chat id against `telegram.user_chat_id`
+  (or the guardian's); a stranger who finds the bot gets one "not registered"
+  line and nothing else. Pinned by `tests/test_strangers.py`.
 - **Google Gemini** (`google-genai`) — two jobs: checking photos, and Friday's
   words. Free tier, shared quota, so the photo check always wins: the chat
   stops at `coach.max_calls_per_day` and runs on the weaker models.
@@ -79,7 +82,15 @@ Without the `-wal` file you are reading yesterday's data.
 
 **What's in the database:** days, blocks, checkpoints, events (the ledger),
 tasks, reminders, standups, coach_log, memories, proposals, foundations, terms.
-Photos are **never** written to disk — they are checked in memory and dropped.
+
+**Photos** are checked in memory, then kept only as a 320px thumbnail
+(`privacy.store_photos: thumbnail`, `thumbnail_dimension: 320`), deleted after
+`privacy.retain_days` (7). They are written inside the container at
+`/app/photos`, **not** on the volume, so every deploy wipes them. A photo that
+fails the privacy check (face, login, identifying background) is never written
+at all. No API endpoint serves them: `/health`, `/agent/state`, `/agent/siren`,
+`/agent/gap` and `/agent/ack` return state and take heartbeats, nothing else.
+Set `privacy.store_photos: none` to keep nothing.
 
 ---
 

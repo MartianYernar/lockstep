@@ -16,6 +16,7 @@ So each task carries two facts the day never had:
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 SCHEMA = """
@@ -41,6 +42,9 @@ MIGRATIONS = {
     "hours_needed": "REAL",
     # 1 is drop-everything, 2 normal, 3 whenever. Ties are broken by deadline.
     "priority": "INTEGER NOT NULL DEFAULT 2",
+    # Names it had before he renamed it, "|"-separated. The seed checks these,
+    # or a renamed task would come back under its old name on the next restart.
+    "aka": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -49,6 +53,15 @@ def _kw(title: str, keywords) -> str:
     if not words:
         words = [title.strip().lower()]
     return ",".join(dict.fromkeys(words))
+
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s|]", " ", (s or "").lower())).strip()
+
+
+def _words(s: str) -> set:
+    return {w for w in _norm(s).split() if len(w) > 1}
 
 
 class Tasks:
@@ -73,8 +86,12 @@ class Tasks:
         for it in items or []:
             if isinstance(it, str):
                 it = {"title": it}
-            have = self.db.one("SELECT * FROM tasks WHERE lower(title) = lower(?)",
-                               (it["title"].strip(),))
+            # Compared in Python: SQLite's lower() leaves Cyrillic alone, so
+            # "РНКП presentation" never matched itself and came back each restart.
+            name = it["title"].strip().lower()
+            have = next((r for r in self.db.q("SELECT * FROM tasks")
+                         if r["title"].strip().lower() == name
+                         or name in (r["aka"] or "").lower().split("|")), None)
             if have is not None:
                 # It exists, so it stays his. But a field he has never filled
                 # in is a blank, not a decision: the config's estimate goes in
@@ -105,21 +122,55 @@ class Tasks:
     def get(self, task_id: int):
         return self.db.one("SELECT * FROM tasks WHERE id = ?", (task_id,))
 
-    def find(self, text: str):
-        """An open task by id, or by a piece of its title."""
-        t = (text or "").strip().lower()
-        if not t:
+    def find(self, text: str, status: str = "open"):
+        """An open task by id, by title, or by a piece of it.
+
+        22 Sep: the friend wrote tasks back the way the list shows them --
+        "#1 Physics IA", "#12 DS HL IA" -- and every one came back "couldn't
+        find a task called ...". He had just said he'd submitted both; neither
+        closed, and the next list still showed them. Whatever shape the name
+        arrives in, if it points at one task, that is the task.
+        """
+        raw = (text or "").strip()
+        if not raw:
             return None
-        if t.isdigit():
-            row = self.get(int(t))
-            return row if row and row["status"] == "open" else None
-        rows = self.open()
-        exact = [r for r in rows if r["title"].lower() == t]
+        pool = self.open() if status == "open" else self.db.q(
+            "SELECT * FROM tasks ORDER BY status = 'open' DESC, id DESC")
+        m = re.match(r"^#?\s*(\d+)\b[\s.:)\-\u2014]*(.*)$", raw)
+        if m:
+            by_id = next((r for r in pool if r["id"] == int(m.group(1))), None)
+            rest = _norm(m.group(2))
+            fits = by_id is not None and (
+                not rest or rest in _norm(by_id["title"])
+                or len(_words(rest) & _words(by_id["title"])) * 2 > len(_words(rest)))
+            if fits:
+                return by_id
+            if not rest:
+                return None
+            raw = m.group(2)
+        t = _norm(raw)
+        exact = [r for r in pool if _norm(r["title"]) == t
+                 or t in _norm(r["aka"] or "").split("|")]
         if exact:
             return exact[0]
-        part = [r for r in rows if t in r["title"].lower()
-                or any(t == k for k in r["keywords"].split(","))]
-        return part[0] if len(part) == 1 else None
+        part = [r for r in pool if t in _norm(r["title"])
+                or any(t == k.strip() for k in (r["keywords"] or "").split(","))]
+        if len(part) == 1:
+            return part[0]
+        # Every word he used is in the title, and only one title has them all.
+        w = _words(t)
+        loose = [r for r in pool if w and w <= _words(r["title"])]
+        return loose[0] if len(loose) == 1 else None
+
+    def rename(self, task_id: int, title: str) -> bool:
+        row = self.get(task_id)
+        title = (title or "").strip()
+        if row is None or not title or title.lower() == row["title"].lower():
+            return False
+        aka = "|".join(x for x in ((row["aka"] or "").split("|") + [row["title"]]) if x)
+        self.db.run("UPDATE tasks SET title = ?, keywords = ?, aka = ? WHERE id = ?",
+                    (title, _kw(title, None), aka, task_id))
+        return True
 
     # -- writing --------------------------------------------------------------
     def add(self, title: str, now: datetime, keywords=None, due=None,
@@ -214,9 +265,11 @@ class Tasks:
             bits = []
             if r["due"]:
                 left = (date.fromisoformat(r["due"]) - day).days
-                bits.append(f"OVERDUE (was due {r['due']})" if left < 0 else
-                            f"DUE TODAY ({r['due']})" if left == 0 else
-                            f"due in {left}d ({r['due']})")
+                d = date.fromisoformat(r["due"])
+                bits.append(f"OVERDUE (was due {d:%a %d %b})" if left < 0 else
+                            f"DUE TODAY ({d:%a %d %b})" if left == 0 else
+                            f"due TOMORROW ({d:%a %d %b})" if left == 1 else
+                            f"due in {left} days ({d:%a %d %b})")
             else:
                 bits.append("no deadline set")
             if r["last_touched"]:
