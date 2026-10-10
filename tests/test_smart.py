@@ -175,7 +175,7 @@ check("and did not see an old day to copy a lesson from",
 check("the work: it added itself is gone",
       "work: sat prep" in u.message.last or "work: Physics IA" in u.message.last, False)
 check("the proposal is on the record for Friday",
-      db.one("SELECT COUNT(*) c FROM coach_log WHERE text LIKE '[proposed plan%'")["c"], 1)
+      db.one("SELECT COUNT(*) c FROM coach_log WHERE text LIKE '[proposed a plan%'")["c"], 1)
 
 print("\n=== a change edits the plan he was shown ===")
 seen["planner"].clear()

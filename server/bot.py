@@ -750,12 +750,23 @@ class LockstepBot:
             return
 
         self.db.ensure_day(target)
+        before = self._open_checks(target)
         self.db.replace_blocks(target, [b.as_tuple() for b in blocks])
         self.db.run(
             "UPDATE days SET plan_locked = 1, plan_submitted_at = ?, checkpoints_built = 0"
             " WHERE date = ?", (now.isoformat(), target.isoformat()))
         self.db.run("DELETE FROM checkpoints WHERE date = ? AND state = 'scheduled'",
                     (target.isoformat(),))
+        # A checkpoint whose block is no longer in the plan keeps demanding a
+        # photo of work the day does not contain. 10 Oct 14:43: the plan said
+        # CAS and the siren was still asking for the IELTS pic, because that
+        # check had already been asked and survived the rewrite.
+        #
+        # Closed as MISSED, never deleted: the miss was real, and replanning
+        # must not become a way to wipe one. What goes is the impossible
+        # demand, not the record of it. The bed check has no block, so it is
+        # left alone.
+        stale = self._close_orphaned(target, before, now)
         built = self.engine.build_checkpoints(target, now)
         self.ledger.append("plan_submitted",
                            {"date": target.isoformat(), "blocks": len(blocks),
@@ -769,6 +780,10 @@ class LockstepBot:
         if built["voided"]:
             tail += (f" ({built['voided']} were already in the past so those "
                      "don't count)")
+        if stale:
+            tail += (f"\n({stale} unanswered check{'s' if stale != 1 else ''} for a block "
+                     "that's not in the plan any more counts as missed — a pic "
+                     "can't be replanned away)")
         if built["first"]:
             pass
         elif target > now.date():
@@ -823,6 +838,46 @@ class LockstepBot:
             return
         await self._accept_replan(update, body)
 
+    def _open_checks(self, day: date) -> list[dict]:
+        """Open checkpoints with the label they were asked about."""
+        return [dict(r) for r in self.db.q(
+            "SELECT c.id, c.due_at, b.label FROM checkpoints c"
+            " JOIN blocks b ON b.id = c.block_id"
+            " WHERE c.date = ? AND c.state IN ('asked','overdue')", (day.isoformat(),))]
+
+    def _close_orphaned(self, day: date, before: list[dict], now: datetime) -> int:
+        """Close checks the new plan has made impossible to answer.
+
+        A photo can only ever prove the block it was asked for. Once that block
+        is gone -- replaced, truncated, renamed -- the demand cannot be met by
+        anything honest, and the siren runs on an obligation with no exit.
+        10 Oct 14:43: the plan said CAS and the siren was still asking for the
+        IELTS pic.
+
+        Matching is by label over the minute it was due, because replace_blocks
+        deletes and re-inserts every row: the old block ids do not survive, so
+        the id-based version of this check quietly matched nothing.
+
+        MISSED, never deleted. The miss was real; replanning cannot wipe one.
+        """
+        blocks = self.db.blocks(day)
+        nowmin = now.hour * 60 + now.minute if day == now.date() else 0
+        closed = 0
+        for row in before:
+            due = datetime.fromisoformat(row["due_at"])
+            minute = due.hour * 60 + due.minute
+            # Answerable means: a block with that label still covers the minute
+            # it was asked for, AND that block has not already ended -- you
+            # cannot photograph yourself doing something you stopped doing.
+            if any(b["start_min"] <= minute < b["end_min"] and b["label"] == row["label"]
+                   and b["end_min"] > nowmin for b in blocks):
+                continue
+            closed += self.db.run(
+                "UPDATE checkpoints SET state='missed', settled_at=? WHERE id=?"
+                " AND state IN ('asked','overdue')",
+                (now.isoformat(), row["id"])).rowcount
+        return closed
+
     async def _accept_replan(self, update: Update, text: str,
                              justified: str | None = None) -> None:
         now = self.cfg.now()
@@ -843,6 +898,7 @@ class LockstepBot:
             if await self._ask_why(update, "replan", today, text, old, new, minute):
                 return
 
+        before = self._open_checks(today)
         kept = [b for b in self.db.blocks(today) if b["start_min"] < minute]
         rows = [(b["start_min"], min(b["end_min"], minute), b["label"], b["category"])
                 for b in kept]
@@ -862,11 +918,7 @@ class LockstepBot:
         # on the record; what goes is the impossible demand. Replanning still
         # cannot erase a miss, which is the property that stops it being a way
         # to wipe debt.
-        closed = self.db.run(
-            "UPDATE checkpoints SET state='missed', settled_at=? WHERE date=?"
-            " AND state IN ('asked','overdue') AND block_id IN ("
-            "   SELECT id FROM blocks WHERE date=? AND end_min <= ?)",
-            (now.isoformat(), today.isoformat(), today.isoformat(), minute)).rowcount
+        closed = self._close_orphaned(today, before, now)
         built = self.engine.build_checkpoints(today, now)
         self.ledger.append("replanned", {"date": today.isoformat(),
                                          "from": f"{minute//60:02d}:{minute%60:02d}"})
@@ -914,8 +966,11 @@ class LockstepBot:
             "action": "plan_proposal", "date": day, "text": rendered, "id": pid,
             "ask": text}
         # On the record, so Friday knows what he was shown when he answers it.
+        # No id in the text: it is a database row number, and on 10 Oct Friday
+        # read it straight back to him as "plan #4 is already locked", which
+        # means nothing to anyone outside this file.
         self.coach.remember(now.date(), now, "coach",
-                            f"[proposed plan #{pid} for {day:%a %d %b}, not locked yet]\n"
+                            f"[proposed a plan for {day:%a %d %b}, not locked yet]\n"
                             f"{rendered}" + (f"\n{note}" if note else ""))
         when = "today" if day == now.date() else (
             "tomorrow" if day == now.date() + timedelta(days=1) else f"{day:%a %d %b}")
@@ -1009,7 +1064,7 @@ class LockstepBot:
         if (self.pending.get(chat) or {}).get("id") == row["id"]:
             self.pending.pop(chat, None)
         await q.edit_message_text("on it 👊")
-        self.coach.remember(now.date(), now, "user", f"[tapped lock on plan #{row['id']}]")
+        self.coach.remember(now.date(), now, "user", "[tapped the lock button]")
         await self._accept_plan(_Reply(q, chat), day, row["text"])
 
     async def _lock_proposal(self, update: Update, pend: dict) -> None:
