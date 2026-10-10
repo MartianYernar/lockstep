@@ -117,6 +117,10 @@ async def api_tests():
         # to get wrong -- the JSON version failed silently for a week.
         r = await client.get("/agent/gap")
         check("gap needs a token", r.status, 401)
+        # Never the body "0": the phone reads that as "nothing owed" and goes
+        # quiet, so a mistyped token would switch the siren off for good.
+        check("and never answers a refusal with silence",
+              (await r.text()).strip(), "UNAUTHORISED")
         r = await client.get("/agent/gap?token=t")
         check("gap answers 200", r.status, 200)
         txt = (await r.text()).strip()

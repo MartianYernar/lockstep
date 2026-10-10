@@ -64,6 +64,9 @@ def _open_tasks(db) -> int | None:
         return None
 
 
+BAD_TOKEN = {"n": 0, "last": None}
+
+
 def build_app(cfg, engine, ledger) -> web.Application:
     token = cfg.api["token"]
     app = web.Application()
@@ -93,6 +96,9 @@ def build_app(cfg, engine, ledger) -> web.Application:
             # stopped polling and nothing can make a noise, whatever the
             # server thinks is owed.
             "phone_silent_min": _silent_min(cfg, lock),
+            # Something is polling with the wrong token: the phone is alive
+            # but talking to a door that will not open.
+            "bad_token_polls": BAD_TOKEN["n"],
             "owed_now": engine.agent_state(cfg.now()).debt_minutes,
         })
 
@@ -136,6 +142,7 @@ def build_app(cfg, engine, ledger) -> web.Application:
         This is a substring test instead. "ALARM 85 10" or "QUIET".
         """
         if not _authorised(request, token):
+            log.warning("siren: unauthorised poll from %s", request.remote)
             return web.Response(status=401, text="UNAUTHORISED")
         now = cfg.now()
         engine.db.set_lock(last_agent_poll=now.isoformat())
@@ -160,7 +167,18 @@ def build_app(cfg, engine, ledger) -> web.Application:
         for exactly that reason, silently, for a week.
         """
         if not _authorised(request, token):
-            return web.Response(status=401, text="0")
+            # NOT "0". 10 Oct 2026 a wrong token answered "0", which the phone
+            # reads as "nothing owed", so one mistyped character disabled the
+            # siren permanently and silently -- the worst failure this endpoint
+            # has, because everything looks fine from both ends. A refusal has
+            # to fail the HTTP request instead: the flow's failure path then
+            # treats it exactly like being offline, which sounds the alarm
+            # inside the window.
+            BAD_TOKEN["n"] += 1
+            BAD_TOKEN["last"] = cfg.now().isoformat()
+            log.warning("gap: unauthorised poll from %s — wrong or missing token",
+                        request.remote)
+            return web.Response(status=401, text="UNAUTHORISED")
         now = cfg.now()
         engine.db.set_lock(last_agent_poll=now.isoformat())
         _note_battery(request, engine, now)
