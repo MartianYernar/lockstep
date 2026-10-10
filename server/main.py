@@ -49,6 +49,9 @@ def main() -> None:
     db = Database(os.environ.get("LOCKSTEP_DB") or os.path.join(ROOT, "lockstep.db"))
     ledger = Ledger(db)
     engine = Engine(cfg, db, ledger)
+    retired = engine.retire_blocker_checks()
+    if retired:
+        log.info("screenshot proof is off: %d waiting checks now want a photo", retired)
     lock = Lock(cfg, db, ledger)
     validator = Validator(cfg)
     bot = LockstepBot(cfg, db, ledger, engine, lock, validator)

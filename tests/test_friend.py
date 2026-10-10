@@ -382,13 +382,16 @@ model(bot, json.dumps({"reply": "bet", "actions": [{"type": "edit_plan", "day": 
     "plan": "16:00-18:00 work: physics IA\n18:00-18:20 eat\n18:20-19:00 gym\n19:00-22:00 work: uni essay"}]}))
 u = FakeUpdate("add eat 18:00-18:20")
 run(bot.on_text(u, None))
-check("the friend's words go first", u.message.replies[0], "bet")
+# The change lands first and Friday speaks after, only if it landed. 10 Oct
+# Friday said "added 20 mins for CAS" and nothing had been added.
+check("the plan change is confirmed first", "rest of today" in u.message.replies[0], True)
+check("then the friend's words", u.message.last, "bet")
 check("then the plan is changed", labels(db),
       ["work: physics IA", "eat", "gym", "work: uni essay"])
 check("the block he was in is not sliced into slivers -- it stays one block",
       [(b["start_min"], b["end_min"]) for b in db.blocks(DAY)][:2],
       [(960, 1080), (1080, 1100)])
-check("and it confirms", "rest of today" in u.message.last, True)
+check("and it confirms", any("rest of today" in r for r in u.message.replies), True)
 check("nothing is left pending", bot.coach.last_plan_edits, [])
 
 cfg, db, led, eng, bot = make(now=N(16, 30))
@@ -417,7 +420,8 @@ model(bot, json.dumps({"reply": "done", "actions": [{"type": "edit_plan", "day":
 u = FakeUpdate("tomorrow: ielts 16-19, essay 19-22")
 run(bot.on_text(u, None))
 check("tomorrow's plan written from chat", labels(db, tmr), ["work: IELTS", "work: uni essay"])
-check("confirmed as tomorrow", "locked in for tomorrow" in u.message.last, True)
+check("confirmed as tomorrow",
+      any("locked in for tomorrow" in r for r in u.message.replies), True)
 
 cfg, db, led, eng, bot = make(now=N(22, 30))
 model(bot, json.dumps({"reply": "ok", "actions": [{"type": "edit_plan", "day": "today",

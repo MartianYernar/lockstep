@@ -744,9 +744,11 @@ class LockstepBot:
                 return
         if existing and existing["plan_locked"] and target <= now.date() \
                 and self.engine.in_window(now):
-            await update.message.reply_text(
-                "today's plan is locked and we're already in the window. "
-                "can't rewrite it now. /offset if something actually came up.")
+            # 10 Oct 14:41: he asked to change the day, Friday built a new
+            # proposal, he tapped lock -- and a locked day in its window is a
+            # wall on this path, so it went nowhere. A change to today, mid-
+            # window, is what /replan is for; send it there, guard and all.
+            await self._accept_replan(update, text, justified=justified)
             return
 
         self.db.ensure_day(target)
@@ -838,6 +840,31 @@ class LockstepBot:
                 parse_mode=ParseMode.HTML)
             return
         await self._accept_replan(update, body)
+
+    def _ledger_mark(self) -> int:
+        row = self.db.one("SELECT MAX(id) m FROM events")
+        return int(row["m"] or 0) if row else 0
+
+    def _plan_changed_since(self, mark: int) -> bool:
+        """Did a plan actually get written after `mark`? The ledger knows."""
+        return self.db.one(
+            "SELECT COUNT(*) c FROM events WHERE id > ?"
+            " AND kind IN ('plan_submitted', 'replanned')", (mark,))["c"] > 0
+
+    def _app_note(self, now: datetime, text: str) -> None:
+        """Put what the app actually did into Friday's memory.
+
+        Friday only ever saw its own replies, never the app's: not the
+        "why are you cutting work?" question, not a refusal, not a held lock.
+        So on 10 Oct it read its own "[tapped lock]" line and told him "plan
+        #4 is already locked with CAS until 15:11" -- a plan the guard had
+        held and that never went in. What happened goes on the record now,
+        in the app's words, so the next reply starts from the truth.
+        """
+        try:
+            self.coach.remember(now.date(), now, "coach", f"[app: {text}]")
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("could not note outcome: %s", exc)
 
     def _relink_checks(self, day: date) -> None:
         """Point checkpoints at the blocks that now cover them.
@@ -1086,7 +1113,11 @@ class LockstepBot:
             self.pending.pop(chat, None)
         await q.edit_message_text("on it 👊")
         self.coach.remember(now.date(), now, "user", "[tapped the lock button]")
+        mark = self._ledger_mark()
         await self._accept_plan(_Reply(q, chat), day, row["text"])
+        self._app_note(now, "that plan is now locked" if self._plan_changed_since(mark)
+                       else "the plan he tapped was NOT locked -- it was held for a "
+                            "reason or refused; the old plan still stands")
 
     async def _lock_proposal(self, update: Update, pend: dict) -> None:
         """He said yes in words. Lock exactly what he was shown."""
@@ -1619,8 +1650,21 @@ class LockstepBot:
         arg = (which if which is not None
                else update.message.text.partition(" ")[2]).strip()
         blocks = self.db.blocks(today)
-        blk = next((b for b in blocks if arg and arg.lower() in b["label"].lower()), None) \
-            or next((b for b in blocks if b["start_min"] <= minute < b["end_min"]), None)
+        # Never a block that is already over. 10 Oct 16:26: "paper" became
+        # "CAS", which matched the CAS block that had ended at 16:14, found
+        # nothing to change there, and answered "already wants a photo" --
+        # while the open check, on the IELTS block, kept asking for Cold
+        # Turkey. With no name given, the block that matters is the one the
+        # siren is asking about.
+        live = [b for b in blocks if b["end_min"] > minute]
+        owed = self.engine.current_checkpoint(today, now)
+        owed_blk = next((b for b in blocks if owed is not None and owed["kind"]
+                         and owed["kind"].startswith("blocker")
+                         and b["start_min"] <= int(owed["due_at"][11:13]) * 60
+                         + int(owed["due_at"][14:16]) < b["end_min"]), None)
+        named = next((b for b in live if arg and arg.lower() in b["label"].lower()), None)
+        blk = (named or owed_blk
+               or next((b for b in blocks if b["start_min"] <= minute < b["end_min"]), None))
         if blk is None:
             await update.message.reply_text(
                 "which block? you're not in one right now — <code>/paper math</code>",
@@ -2543,7 +2587,15 @@ class LockstepBot:
                                 if explainable else None)
             await update.message.reply_text(
                 f"❌ doesn't count.\n\n{html.escape(verdict.reason)}\n\n"
-                + ("wrong read? tell me what it is (like \"рнкп is my presentation\") "
+                # A photo of the right work in the wrong block is a schedule
+                # problem, not a photo problem. 10 Oct 16:34: CAS on screen,
+                # IELTS on the plan, and the only advice was "send another
+                # one" -- of IELTS, which he wasn't doing.
+                + ("doing something else right now? say so (\"I'm still on CAS\") "
+                   "and I'll switch the block, then this same photo counts.\n"
+                   "wrong read instead? tell me what it is and I'll look again."
+                   if explainable and verdict.failure_code == "mismatch" else
+                   "wrong read? tell me what it is (like \"рнкп is my presentation\") "
                    "and I'll look again. or send another one."
                    if explainable else
                    "doing this one on paper? say <code>/paper</code> and I'll take a "
@@ -2832,27 +2884,48 @@ class LockstepBot:
             await self._recheck(update, recheck, now)
             return
         edits, self.coach.last_plan_edits = self.coach.last_plan_edits, []
-        prepared = self._prepare_chat_plan(edits[0], now) if edits else None
-        # If the change is about to be held for a reason, the model's reply
-        # ("got you, switched") would be a lie told one message before the
-        # question. Say only the question.
-        if out and not self._chat_plan_held(prepared, now):
-            await update.message.reply_text(out[:3900])
-        elif not out and prepared is None:
-            await update.message.reply_text("sorry, blanked. say that again?")
-            return
-        if prepared is not None:
+        prepared = self._prepare_chat_plan(edits[0], now, said=text) if edits else None
+        if prepared is None:
+            if out:
+                await update.message.reply_text(out[:3900])
+            else:
+                await update.message.reply_text("sorry, blanked. say that again?")
+                return
+        else:
+            # The change goes in FIRST, and Friday's words follow only if it
+            # did. 10 Oct 16:23: "added 20 mins for CAS" -- and nothing was
+            # added. Predicting whether the guard would hold it was the bug;
+            # asking the ledger afterwards cannot be wrong.
+            mark = self._ledger_mark()
             await self._apply_chat_plan(update, prepared)
+            if self._plan_changed_since(mark):
+                if out:
+                    await update.message.reply_text(out[:3900])
+            else:
+                self._app_note(now, "the schedule change he asked for was NOT "
+                                    "applied (held for a reason, or refused) -- the "
+                                    "plan is unchanged; do not say it changed")
         # Last word, after whatever he was told: anything from a list that
         # does not look like it landed.
         missed = self._unsaved_lines(text, out)
         if missed:
             await update.message.reply_text(missed, parse_mode=ParseMode.HTML)
 
-    def _prepare_chat_plan(self, edit: dict, now: datetime):
+    def _his_words_today(self, now: datetime, said: str = "") -> str:
+        rows = self.db.q("SELECT text FROM coach_log WHERE date = ? AND role = 'user'",
+                         (now.date().isoformat(),))
+        return "\n".join([r["text"] for r in rows] + [said])
+
+    def _prepare_chat_plan(self, edit: dict, now: datetime, said: str = ""):
         """Turn a chat edit into (path, day, plan text), or a message to send.
 
         path is "replan" (today, window open) or "plan" (anything else).
+
+        "work:" survives only where HE wrote it. 10 Oct 16:37 Friday rewrote
+        the evening and every block came back as "work: ..." -- "work: write
+        uni essay", "work: prep for physics" -- each now demanding a Cold
+        Turkey screenshot he had never agreed to. The planner already had this
+        rule; the edit path did not.
         """
         text = (edit.get("plan") or "").strip()
         today = now.date()

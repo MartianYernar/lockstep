@@ -93,6 +93,26 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def retire_blocker_checks(self) -> int:
+        """With screenshots switched off, an already-scheduled one is a demand
+        nothing can meet. Turn every open one into an ordinary photo check.
+
+        10 Oct 2026: after a day of sending photos of his screen and being told
+        "no Cold Turkey window in the shot", he switched the screenshot proof
+        off for good. The config change only reaches checkpoints built after
+        it; the ones already on today's plan would have gone on asking. This
+        runs at startup, and only touches checks still waiting for an answer --
+        nothing settled is rewritten.
+        """
+        if bool(self.cfg.vision.get("require_blocker_for_work", False)):
+            return 0
+        n = self.db.run(
+            "UPDATE checkpoints SET kind='activity' WHERE kind LIKE 'blocker%'"
+            " AND state IN ('scheduled','asked','overdue')").rowcount
+        if n:
+            self.ledger.append("blocker_checks_retired", {"checks": n})
+        return n
+
     # -- window helpers --------------------------------------------------------
     def window(self, day: date) -> tuple[int, int]:
         """Enforcement window, in minutes past midnight, including any shifts."""

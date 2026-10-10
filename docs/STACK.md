@@ -181,8 +181,9 @@ deliberate steps, at least one of which needs dad's password.
 ## 4 · The laptop (Windows 11)
 
 - **Cold Turkey Blocker** — blocks sites in Chrome/Edge/Firefox through its
-  browser extensions, scheduled over work hours. The `work:` blocks in a plan
-  are proven with a screenshot of it running.
+  browser extensions, scheduled over work hours. It is a blocker only: since
+  10 Oct 2026 the bot no longer asks for a screenshot of it. Every block is
+  proved by one photo of you doing the work, clock in shot.
 - **hosts file** — `C:\Windows\System32\drivers\etc\hosts` maps
   `youtube.com`, `www.youtube.com`, `m.youtube.com`, `music.youtube.com`,
   `youtu.be`, `tiktok.com`, `www.tiktok.com`, `vm.tiktok.com`,

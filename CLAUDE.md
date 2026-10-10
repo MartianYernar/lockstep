@@ -30,7 +30,14 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
 
 ## The design, in short
 
-- **Proof** happens at the top of each block, not continuously — one Cold Turkey
+- **Proof is one photo, never a screenshot.** Since 10 Oct 2026, by his decision,
+  every block -- `work:` or not -- is proved by a photo of him doing it with a
+  clock in shot; a photo of his laptop with the work on it counts. The Cold
+  Turkey screenshot is off (`vision.require_blocker_for_work: false`) and
+  `Engine.retire_blocker_checks` turns any still-waiting one into a photo check
+  at startup. He spent a whole day being refused for photos of his own screen;
+  do not bring it back without asking him. The older history, kept for why:
+  proof used to be one Cold Turkey
   screenshot showing the block running, plus an activity photo for non-`work:`
   blocks. Constant interruption was raising his stress, which defeats the point.
   It was three screenshots on 1 Sep and cost an evening: the validation had been
@@ -80,6 +87,12 @@ on a feeling. That takes ten seconds and costs him nothing if he still means it.
   is an edit of THAT plan (`REVISE`), not a rebuild from it. "work:" on a
   built block survives only if he typed it (`_keep_his_switch`) -- it decides
   what proof he owes, so the model does not get to choose it.
+- **The app speaks first; Friday only after it lands.** A schedule change from
+  chat is applied before Friday's reply is sent, and the reply goes out only if
+  the ledger shows a `plan_submitted`/`replanned`. Outcomes are written into
+  Friday's memory as `[app: ...]` lines. 10 Oct it twice said a change was made
+  that the guard had held. To read the live record: `railway ssh` and
+  `scripts/day_dump.py`.
 - **Friday thinks; nags don't.** Chat, the replan judge and the planner run
   on the smart tier (strongest model, thinking on). Worded nags run on the
   cheap tier, and after two ignored checks in a row the written line goes out
