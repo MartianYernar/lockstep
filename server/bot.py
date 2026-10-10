@@ -718,7 +718,9 @@ class LockstepBot:
         # has to cover Saturday's hours; validating it against the weekday window
         # would accept a plan that leaves the whole weekend morning unblocked,
         # inside an enforced window, and therefore never checked.
-        start = self.cfg.enforce_start_for(target)
+        # The window for THAT day, except that today starts now: a plan
+        # written at 13:21 cannot be asked to cover the morning.
+        start = self.cfg.plan_start_for(target, now)
         end = self.cfg.enforce_end_for(target)
         try:
             blocks = planner.parse(text)

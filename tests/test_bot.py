@@ -96,10 +96,13 @@ check("target rolls to tomorrow once today is planned",
 print("\n=== /plan: gaps are refused with the gap named ===")
 cfg, db, led, eng, lk, bot, val = make()
 goalup(db, bot, cfg)
-u = FakeUpdate("/plan\n16:00-17:00 work\n18:00-22:00 relax")
+# The clock is pinned at 18:00, and a plan starts where the day is now, so
+# the hole has to be in the part of the day that is still ahead. A gap before
+# now is just time already spent, and refusing it would be pedantry.
+u = FakeUpdate("/plan\n16:00-19:00 work\n20:00-22:00 relax")
 run(bot.cmd_plan(u, None))
 check("refused", u.message.last.startswith("❌"), True)
-check("names the actual gap", "17:00-18:00" in u.message.last, True)
+check("names the actual gap", "19:00-20:00" in u.message.last, True)
 check("nothing was stored", len(db.blocks(bot.target_plan_date(cfg.now()))), 0)
 
 print("\n=== /plan: bare command prompts, then the next message is the plan ===")

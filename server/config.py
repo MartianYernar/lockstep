@@ -172,6 +172,21 @@ class Config:
         """
         return int(os.environ.get("PORT") or self.raw["api"]["port"])
 
+    def plan_start_for(self, day, now) -> int:
+        """Where a plan written *now* has to begin.
+
+        10 Oct 2026, 13:21: he asked for a 20-minute food break "right now" and
+        the planner put it at 10:00-10:20, because the day is built from the
+        window's opening time and Saturday's window opens at 10:00. Three and a
+        half hours of it were already gone. For today, the plan starts at the
+        current minute; for any other day, at the window.
+        """
+        start = self.enforce_start_for(day)
+        if day != now.date():
+            return start
+        minute = now.hour * 60 + now.minute
+        return max(start, min(minute, self.enforce_end_for(day)))
+
     # -- time helpers ----------------------------------------------------------
     def now(self) -> datetime:
         return datetime.now(self.tz)

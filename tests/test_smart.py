@@ -22,7 +22,7 @@ import json
 import os
 import sys
 import types
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -250,6 +250,39 @@ run(bot.on_text(u, None))
 check("the goals are in", len(db.goals(DAY)), 3)
 check("and so is the plan he locked", labels(db)[:2], ["Physics IA", "sat prep"])
 check("he's told", "locked in" in u.message.last.lower(), True)
+
+print("\n=== a plan made at 13:21 starts at 13:21 ===")
+# 10 Oct 2026, 13:21, a Saturday: he said "I'm eating for 20 min now" and the
+# plan came back with the eating block at 10:00-10:20, because the weekend
+# window opens at 10:00 and the day was always built from there. Three and a
+# half hours of it were already over.
+LATE = N(18, 21)                      # mid-window, like his 13:21 on a Saturday
+cfg, db, led, eng, bot = make(LATE)
+check("the window still opens when it opens", cfg.enforce_start_for(DAY), 16 * 60)
+check("but a plan written now starts now",
+      cfg.plan_start_for(DAY, LATE), 18 * 60 + 21)
+check("tomorrow is untouched",
+      cfg.plan_start_for(DAY + timedelta(days=1), LATE), 16 * 60)
+check("and one written before the window still starts at the window",
+      cfg.plan_start_for(DAY, N(8, 0)), 16 * 60)
+
+seen = model(bot, planner_out=[{"blocks": [
+    {"start": "18:21", "end": "18:41", "label": "eat"},
+    {"start": "18:41", "end": "22:00", "label": "prep for IELTS"}],
+    "note": "food first"}], friday=[say("ok")])
+blocks, note = run(bot.dayplanner.build(DAY, "imma eat for 20 min now", LATE))
+check("the planner is told the day starts at 18:21", "18:21" in seen["planner"][0], True)
+check("and that the hours before it are gone",
+      "never write a block for them" in seen["planner"][0], True)
+check("so the food block is now, not this morning", blocks[0].hhmm(), "18:21-18:41")
+check("and it still runs to the end of the window",
+      blocks[-1].hhmm().endswith("22:00"), True)
+
+u = FakeUpdate("/plan\n13:21-13:41 eat\n13:41-22:00 prep for IELTS")
+run(bot.cmd_plan(u, None))
+check("a plan that skips the morning is not called full of holes",
+      "no block" in u.message.last, False)
+check("it just locks", [b["label"] for b in db.blocks(DAY)][0], "eat")
 
 print("\n=== redo keeps the plan to edit ===")
 cfg, db, led, eng, bot = make()

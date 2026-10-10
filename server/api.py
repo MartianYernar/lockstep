@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from aiohttp import web
 
@@ -45,6 +46,16 @@ def _note_battery(request: web.Request, engine, now) -> None:
     engine.db.set_lock(**fields)
 
 
+def _silent_min(cfg, lock) -> int | None:
+    last = lock["last_agent_poll"]
+    if not last:
+        return None
+    try:
+        return int((cfg.now() - datetime.fromisoformat(last)).total_seconds() // 60)
+    except (TypeError, ValueError):
+        return None
+
+
 def _open_tasks(db) -> int | None:
     """None rather than a 500: the table only exists once the coach has run."""
     try:
@@ -78,6 +89,11 @@ def build_app(cfg, engine, ledger) -> web.Application:
             "daily_doc": bool((cfg.raw.get("daily_doc") or {}).get("enabled")
                               and (cfg.raw.get("daily_doc") or {}).get("url")),
             "open_tasks": _open_tasks(engine.db),
+            # The siren lives on the phone. If this grows, the phone has
+            # stopped polling and nothing can make a noise, whatever the
+            # server thinks is owed.
+            "phone_silent_min": _silent_min(cfg, lock),
+            "owed_now": engine.agent_state(cfg.now()).debt_minutes,
         })
 
     async def state(request: web.Request) -> web.Response:

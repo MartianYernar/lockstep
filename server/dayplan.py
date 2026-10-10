@@ -73,7 +73,10 @@ HOW TO CHOOSE WHAT GOES IN THE FREE TIME:
   Ticked lines are already done -- never plan them again."""
 
 BUILD = """TODAY IS {today}. This plan is for {day} ({weekday}).
-The enforced window is {start}-{end}. He must be doing something the whole time.
+Plan from {start} to {end}, and he must be doing something the whole time.
+{start} may be the middle of the day: it is where the plan starts NOW. Hours
+before it are gone -- never write a block for them, and if he says he is doing
+something "now", it begins at {start}.
 
 WHAT HE SAID:
 {text}
@@ -104,6 +107,7 @@ HIS BIG TASKS, most urgent first:
 {agenda}
 
 {events}{doc}{chat}
+The plan runs {start}-{end}; {start} is now, so nothing goes before it.
 Make his change. Keep every other block as it was unless the change forces it
 to move; if it does, move the fewest blocks you can -- and never past a
 task's deadline (check the chat for a time today). If his change can't be done
@@ -246,8 +250,11 @@ class DayPlanner:
         With `current` and `change`, edits a plan he was already shown instead
         of starting again.
         """
-        start = self.cfg.enforce_start_for(day)
+        start = self.cfg.plan_start_for(day, now)
         end = self.cfg.enforce_end_for(day)
+        if start >= end:
+            raise planner.PlanError(
+                "today's window is over -- want me to do tomorrow instead?")
         hhmm = lambda m: f"{m//60:02d}:{m%60:02d}"            # noqa: E731
         system = SYSTEM.format(name=self.cfg.user_name, start=hhmm(start), end=hhmm(end))
         said = (text or "").strip()
