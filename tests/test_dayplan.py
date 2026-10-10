@@ -126,7 +126,13 @@ class Q:
 
 q = Q(f"plan:ok:{bot.pending[1]['id']}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
-check("it says so, naming the day", q.edited.startswith("locked in for"), True)
+# The button only acknowledges the tap. Whether it actually locked is for
+# _accept_plan to say, because the rewrite guard may still hold it and ask
+# why -- 10 Oct he got "locked in for Sat 10 Oct" and then "wait, that cuts
+# 10 min of real work", one after the other.
+check("the tap is acknowledged", q.edited, "on it 👊")
+check("and the lock is announced once it really happened",
+      any(r.startswith("locked in for") for r in q.replies), True)
 check("and the plan is in the database, with no work: he never wrote", labels(db)[0], "physics IA")
 check("covering the whole window",
       (db.blocks(DAY)[0]["start_min"], db.blocks(DAY)[-1]["end_min"]), (16 * 60, 22 * 60))
@@ -328,7 +334,7 @@ run(bot.on_button(types.SimpleNamespace(callback_query=q), None))
 check("tapping the FIRST message locks the FIRST plan",
       labels(db)[0], "physics IA")
 check("not the newer one", "IELTS speaking" in labels(db), False)
-check("and it says which day", "locked in for" in q.edited, True)
+check("and it says which day", any("locked in for" in r for r in q.replies), True)
 
 q2 = Q(f"plan:ok:{first_id}")
 run(bot.on_button(types.SimpleNamespace(callback_query=q2), None))

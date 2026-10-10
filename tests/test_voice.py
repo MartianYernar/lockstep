@@ -79,7 +79,16 @@ print("=== the photo request is worded by Friday ===")
 cfg, db, led, eng, bot = make()
 seen = model(bot)
 ask(bot)
-check("it went out in his voice", sent(bot), ["yo, pic for physics IA whenever you're ready"])
+check("it went out in his voice",
+      sent(bot)[0].startswith("yo, pic for physics IA whenever you're ready"), True)
+# 10 Oct: "when he asks for photo, can he at least give me specifically what
+# it needs". Friday writes the message; the app spells out the requirement
+# underneath, so a friendly phrasing can never drop the details.
+needs = sent(bot)[0].split("📸 needs: ")[1]
+check("the app spells out what the photo must show", "work: physics IA" in needs, True)
+check("including the clock", "clock" in needs, True)
+check("and the actual deadline, not a duration", "by 16:03" in needs, True)
+check("and the privacy rule", "no face" in needs, True)
 check("Friday was told the job", "proof photo" in seen["jobs"][0], True)
 check("and given the block", "work: physics IA" in seen["facts"][0], True)
 check("and the grace period", "3 minutes" in seen["facts"][0], True)

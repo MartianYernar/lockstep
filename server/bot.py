@@ -1008,7 +1008,7 @@ class LockstepBot:
         day = date.fromisoformat(row["date"])
         if (self.pending.get(chat) or {}).get("id") == row["id"]:
             self.pending.pop(chat, None)
-        await q.edit_message_text(f"locked in for {day:%a %d %b} 🤝")
+        await q.edit_message_text("on it 👊")
         self.coach.remember(now.date(), now, "user", f"[tapped lock on plan #{row['id']}]")
         await self._accept_plan(_Reply(q, chat), day, row["text"])
 
@@ -3184,12 +3184,26 @@ class LockstepBot:
                     if kind.startswith("blocker") else
                     "a photo of his bed, opened, ready to sleep in" if kind == "bed" else
                     "a photo of him actually doing it, with a clock or timestamp in shot")
+            # 10 Oct, his words: "when he asks for photo, can he at least
+            # give me specifically what it needs". Friday writes the message,
+            # and sometimes writes a friendly one with the details rubbed off.
+            # This line is not written by a model: it is the requirement.
+            deadline = (due + timedelta(minutes=grace))
+            needs = ("📸 needs: " + (
+                f"screenshot of {blocker} running, taskbar clock visible"
+                if kind.startswith("blocker") else
+                "photo of your bed, opened, ready to sleep in" if kind == "bed" else
+                f"photo of you doing \"{p['label']}\", with a clock or phone "
+                "time in the shot")
+                + f" — by {deadline:%H:%M}")
+            if kind == "activity":
+                needs += " (no face, no logins)"
             rider = (self._standup_rider(due, now)
                      if kind == "activity" and not starting else "")
             if rider:
                 body += "\n" + rider
             if self._ignored_streak(due.date(), p["due_at"]):
-                await self.send_user(body)
+                await self.send_user(f"{body}\n{needs}")
                 self.ledger.append("checkpoint_asked",
                                    {"checkpoint": p["checkpoint_id"], "kind": kind})
                 return
@@ -3205,9 +3219,11 @@ class LockstepBot:
                    if kind == "activity" else "")
                 + (f"in the same message, also ask the 20-minute check: what exactly "
                    f"he's on right now (the precise problem/page), whether he's moving "
-                   f"fast, and what he's stuck on. He answers in text.\n" if rider else ""),
+                   f"fast, and what he's stuck on. He answers in text.\n" if rider else "")
+                + "the app prints the exact requirement under your message, so "
+                  "don't list it yourself -- just say the thing like a person\n",
                 body)
-            await self.send_user(body)
+            await self.send_user(f"{body}\n{needs}")
             self.ledger.append("checkpoint_asked",
                                {"checkpoint": p["checkpoint_id"], "kind": kind})
 
