@@ -2557,6 +2557,12 @@ class LockstepBot:
         await update.message.chat.send_action("typing")
         verdict = await self.validator.check(blob, self.coach.terms.expand(label), category,
                                              now, mime=mime, kind=cp["kind"] or "activity")
+        # Whatever happened, Friday hears it. 10 Oct 20:48 a photo was refused
+        # for "your name or login", he wrote "these aren't my name and login",
+        # and Friday -- never told -- answered with password-reset advice.
+        self._app_note(now, (f"his photo for \"{label}\" was ACCEPTED" if verdict.ok else
+                             f"his photo for \"{label}\" was REFUSED "
+                             f"({verdict.failure_code}): {verdict.reason[:200]}"))
 
         if not verdict.ok:
             self.db.run("UPDATE checkpoints SET attempts = attempts + 1, verdict = ? WHERE id = ?",
@@ -2574,7 +2580,8 @@ class LockstepBot:
             # the CAS sheet he was working on came back as a re-photograph.
             # Explaining it changes nothing by itself -- the same checker looks
             # again, with his words in front of it, and still decides.
-            explainable = verdict.failure_code in ("mismatch", "privacy_location", "replay")
+            explainable = verdict.failure_code in ("mismatch", "privacy_location", "replay",
+                                                   "privacy_identity")
             # "work:" asks for a blocker screenshot, which is impossible if the
             # work is on paper. 19 Sep: the planner put "work:" in front of
             # "math sat questions without chair at table, on knees" and then

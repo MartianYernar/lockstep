@@ -78,8 +78,22 @@ check("plain privacy code", r.failure_code, "privacy")
 check("no invitation to argue", "look again" in r.reason, False)
 check("it names whose rule it is", "Your rule" in r.reason, True)
 
-r = verdict(identity_visible=True)
-check("a login is the same", r.failure_code, "privacy")
+print("\n=== 'your name or login' can be argued, a face cannot ===")
+# 10 Oct 20:47: his uni-list spreadsheet was refused because it contained
+# postech-iuadmission@postech.ac.kr -- a university's address. Whose details
+# are on screen is a judgement, and he is the one who knows.
+r = verdict(identity_visible=True,
+            privacy_detail="The email address postech-iuadmission@postech.ac.kr is visible.")
+check("refused, still", r.ok, False)
+check("but with its own code", r.failure_code, "privacy_identity")
+check("and an invitation to say it isn't his", "isn't yours" in r.reason, True)
+r = verdict(identity_visible=True, face_visible=True)
+check("a face beside it is still not arguable", r.failure_code, "privacy")
+v = validator()
+run(v.check(b"x", "finish master uni list", "work", N(16, 5), kind="activity"))
+rule = v._ask.prompt.split("identity_visible")[1].split("location_revealing")[0]
+check("the checker is told it means HIS identity", "HIS OWN identity" in rule, True)
+check("and that a university's address is not it", "admissions address" in rule, True)
 
 r = verdict(face_visible=True, location_revealing=True)
 check("a face plus a place is still a face", r.failure_code, "privacy")
@@ -144,6 +158,23 @@ check("and the photo is kept for another look", b.last_reject is not None, True)
 b, u = bot_with("privacy")
 check("a face rejection offers nothing", "tell me what it is" in u.message.last, False)
 check("and keeps no photo", b.last_reject, None)
+
+print("\n=== 20:48: 'bro these aren't my name and login' ===")
+b, u = bot_with("privacy_identity")
+check("an identity refusal can be explained", "tell me what it is" in u.message.last, True)
+check("the photo is kept for that second look", b.last_reject is not None, True)
+note = b.db.one("SELECT text FROM coach_log WHERE text LIKE '[app:%REFUSED%'")
+check("and Friday's memory says the photo was refused, and why",
+      note is not None and "privacy_identity" in note["text"], True)
+
+b, u = bot_with("privacy")
+note = b.db.one("SELECT text FROM coach_log WHERE text LIKE '[app:%REFUSED%'")
+check("even a refusal that can't be argued is in Friday's memory -- "
+      "so his reply to it never arrives without context", note is not None, True)
+
+from server.coach import ACTIONS  # noqa: E402
+check("a complaint is never filed as a note on a task",
+      "Never for a\n  complaint" in ACTIONS or "Never for a complaint" in ACTIONS, True)
 
 print("\n=== a laptop with the work on it is not a re-photograph ===")
 # The rule exists to stop him re-photographing yesterday's picture. On 10 Oct

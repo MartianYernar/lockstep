@@ -814,7 +814,9 @@ actually told you, never guessed:
   this -- that makes a duplicate.
 - {"type":"drop_task","task":"#id"}  he wants one off the list without doing it.
 - {"type":"set_due","task":"#id","date":"YYYY-MM-DD"}  its deadline
-- {"type":"add_note","task":"#id","text":...}  progress he described
+- {"type":"add_note","task":"#id","text":...}  ONLY when he tells you what he
+  actually did on that task ("finished writing task 2"). Never for a
+  complaint, a question, or anything about the bot or a photo.
   For "task", write the #id number from the list above ("#12"), nothing else.
 - {"type":"show_list","text":"tasks" / "events" / "all"}  whenever he asks to
   see his to-do list, tasks, events, deadlines or "everything". The app

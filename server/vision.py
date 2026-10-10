@@ -203,9 +203,17 @@ judge them strictly -- a false negative here costs them more than a retake:
 
 face_visible - true if any human face is identifiable in the frame, theirs or
   anyone else's. A body with the face out of frame or turned away is false.
-identity_visible - true if any name, username, login, email address, account
-  name or profile photo is readable anywhere, including in browser tabs,
-  window titles, sidebars and notification banners.
+identity_visible - true if HIS OWN identity is readable: his name, his
+  username or login, his personal email address, the account he is signed in
+  as (browser profile, mail inbox, chat sidebar), his profile photo, his phone
+  number, or an ID document -- anywhere, including tabs, window titles and
+  notification banners.
+  Other people's and organisations' public details are NOT his identity and
+  are false: a university admissions address, a teacher's school email, a
+  company or university website, a list of contacts or institutions he is
+  compiling in a spreadsheet, authors' names in a book. 10 Oct 2026 his uni
+  list was refused because it contained postech-iuadmission@postech.ac.kr --
+  that is a university's address, not his.
 location_revealing - true only if a STRANGER COULD FIND HIM from this frame
   alone: a readable street name or house number, the name or logo of his
   school or block of flats, a shop sign carrying a branch address, a map or
@@ -501,13 +509,24 @@ class Validator:
                 # location-only refusal carries its own code, and the bot
                 # lets him say what it actually is.
                 only_place = located and len(leaks) == 1
+                # A face is never arguable. "Your name or login" can be: it is
+                # a judgement about WHOSE details are on screen, and he is the
+                # one who knows whether that address is his or a university's.
+                # The same checker still decides on the second look.
+                only_identity = (base["identity_visible"] and not base["face_visible"]
+                                 and not located)
+                code = ("privacy_location" if only_place else
+                        "privacy_identity" if only_identity else "privacy")
                 return Verdict(
                     ok=False,
-                    failure_code="privacy_location" if only_place else "privacy",
+                    failure_code=code,
                     reason=f"Not counted — this shows {', '.join(leaks)}. "
                            f"{base['privacy_detail']} "
                            + ("Reframe it, or tell me what's actually in shot and "
                               "I'll look again." if only_place else
+                              "If that isn't yours -- a university's or someone "
+                              "else's details -- tell me and I'll look again. "
+                              "Or crop it out." if only_identity else
                               "Reframe and send it again. (Your rule, not mine.)"),
                     **base)
 
