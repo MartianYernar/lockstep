@@ -145,4 +145,16 @@ b, u = bot_with("privacy")
 check("a face rejection offers nothing", "tell me what it is" in u.message.last, False)
 check("and keeps no photo", b.last_reject, None)
 
+print("\n=== a laptop with the work on it is not a re-photograph ===")
+# The rule exists to stop him re-photographing yesterday's picture. On 10 Oct
+# it refused a photo of his own laptop showing the CAS sheet he was filling
+# in, which is simply what work at a computer looks like.
+from server.vision import PROMPT  # noqa: E402
+rule = PROMPT.split("looks_like_screen_of_photo")[1].split("blocker_visible")[0]
+check("it is only about screens showing photographs",
+      "PHOTOGRAPH or camera image" in rule, True)
+check("a document or spreadsheet on screen is explicitly fine",
+      "spreadsheet" in rule and "it is false" in rule, True)
+check("and the doubtful case is not a refusal", "not sure, it is false" in rule, True)
+
 sys.exit(report("PRIVACY TESTS"))

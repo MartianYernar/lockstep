@@ -159,8 +159,16 @@ activity_match - true if the frame satisfies the requirement above.
 confidence - 0.0 to 1.0, how sure you are about activity_match.
 reason - one short sentence a person would find fair, addressed to them
   directly. If activity_match is false, say concretely what was missing.
-looks_like_screen_of_photo - true if this is a picture OF a screen showing
-  another photo, or an obvious re-photograph of an older image.
+looks_like_screen_of_photo - true ONLY when the screen in the frame is itself
+  showing a PHOTOGRAPH or camera image -- a gallery, a chat thread, a picture
+  of a picture -- i.e. someone re-photographing an older shot instead of
+  taking a new one.
+  A photo of a laptop or monitor showing the WORK is NOT this. A document, a
+  spreadsheet, a slide deck, an editor, a browser, a PDF, a form: that is the
+  normal way to photograph work done at a computer, and it is false. 10 Oct
+  2026 a photo of his laptop with a CAS spreadsheet open was refused as a
+  re-photograph, which is the opposite of what this field is for. If you are
+  not sure, it is false.
 
 blocker_visible - true if a website/app blocker window or overlay is on screen.
 blocker_active - true if that blocker clearly shows a block currently RUNNING:
@@ -504,8 +512,10 @@ class Validator:
 
         if base["replay_suspected"]:
             return Verdict(ok=False, failure_code="replay",
-                           reason="That looks like a photo of a screen showing another photo. "
-                                  "Take a fresh one.", **base)
+                           reason="That looks like a re-photograph of an older picture — "
+                                  "a screen with a photo on it. If that's your laptop "
+                                  "with the actual work on it, say so and I'll look "
+                                  "again.", **base)
         if not base["timestamp_visible"]:
             return Verdict(ok=False, failure_code="no_timestamp",
                            reason="No visible clock in the frame. Turn the camera's timestamp "

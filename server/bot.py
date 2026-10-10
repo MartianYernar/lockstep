@@ -2497,7 +2497,11 @@ class LockstepBot:
             # a login is never negotiable -- but "this could place you" is a
             # judgement about an ordinary street, and he is the one who knows
             # whether the poles behind him name his address.
-            explainable = verdict.failure_code in ("mismatch", "privacy_location")
+            # "replay" joins these after 10 Oct: a photo of his laptop showing
+            # the CAS sheet he was working on came back as a re-photograph.
+            # Explaining it changes nothing by itself -- the same checker looks
+            # again, with his words in front of it, and still decides.
+            explainable = verdict.failure_code in ("mismatch", "privacy_location", "replay")
             # "work:" asks for a blocker screenshot, which is impossible if the
             # work is on paper. 19 Sep: the planner put "work:" in front of
             # "math sat questions without chair at table, on knees" and then

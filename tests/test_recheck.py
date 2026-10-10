@@ -139,8 +139,22 @@ check("two looks, then it stops", "looked twice" in u.message.last, True)
 check("the photo is dropped", bot.last_reject, None)
 check("still not counted", state(db) in ("asked", "overdue"), True)
 
+print("\n=== a 'that's a re-photograph' can be explained ===")
+# 10 Oct 2026: a photo of his laptop showing the CAS sheet he was working on
+# came back "that looks like a photo of a screen showing another photo". It
+# was the work. Explaining settles nothing by itself -- the same checker looks
+# again, with his words in front of it, and still decides.
+cfg, db, led, eng, bot = make(N(16, 1), Checker(code="replay", yes_word="presentation"))
+u = photo()
+run(bot.on_photo(u, None))
+check("the photo is kept", bot.last_reject is not None, True)
+check("and he is invited to say what it is", "tell me what it is" in u.message.last, True)
+seen = model(bot, EXPLAIN)
+run(bot.on_text(FakeUpdate("bro that's my laptop with the actual work on it"), None))
+check("the second look still belongs to the checker", state(db), "satisfied")
+
 print("\n=== some rejections can't be explained away ===")
-for code in ("no_timestamp", "privacy", "stale", "replay"):
+for code in ("no_timestamp", "privacy", "stale"):
     cfg, db, led, eng, bot = make(N(16, 1), Checker(code=code, yes_word=None))
     u = photo()
     run(bot.on_photo(u, None))
