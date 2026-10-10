@@ -16,6 +16,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
 from . import images, planner, reminders, vision
+from .dailydoc import DailyDoc
 from .config import _hhmm
 from .lock import LockError
 
@@ -52,7 +53,8 @@ class LockstepBot:
         from .dayplan import DayPlanner
         self.agenda = Agenda(db, cfg, self.tasks)
         self.coach.agenda = self.agenda
-        self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda)
+        self.doc = DailyDoc(cfg)
+        self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda, self.doc)
         from .dayplan import Proposals
         self.proposals = Proposals(db)
         try:
@@ -1205,6 +1207,50 @@ class LockstepBot:
         if line:
             keys.append(line)
         return InlineKeyboardMarkup(keys)
+
+    async def _load_doc(self, now: datetime) -> None:
+        """Put today's list from his doc in front of Friday before it answers."""
+        if not self.doc.enabled:
+            return
+        try:
+            sec = await self.doc.for_day(now.date(), now)
+            self.coach.doc_today = self.doc.describe(sec)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("doc load failed: %s", exc)
+
+    async def cmd_doc(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """What the bot reads in his doc for today — so a mismatch is visible.
+
+        He writes the day in Google Docs and ticks boxes there. If the bot and
+        the doc ever disagree about what today is for, that is a parsing bug or
+        a heading he wrote differently, and he should be able to see which in
+        one command rather than guessing.
+        """
+        if not self._is_user(update):
+            return
+        if not self.doc.enabled:
+            await update.message.reply_text(
+                "no doc hooked up. put its link in <code>daily_doc.url</code>.",
+                parse_mode=ParseMode.HTML)
+            return
+        now = self.cfg.now()
+        arg = update.message.text.partition(" ")[2].strip().lower()
+        day = now.date() + timedelta(days=1) if arg.startswith("tom") else now.date()
+        await update.message.chat.send_action("typing")
+        sec = await self.doc.for_day(day, now, force=True)
+        if sec is None:
+            days = [f"{s['date']:%a %d %b}" for s in await self.doc.sections(now)]
+            await update.message.reply_text(
+                f"nothing in the doc for {day:%a %d %b}.\n\n"
+                + ("days I can see: " + ", ".join(days[-8:]) if days else
+                   "I can't read any day headings in it — is the link shared "
+                   "with anyone who has it?"))
+            return
+        left = len(self.doc.open_items(sec))
+        await update.message.reply_text(
+            f"<b>{day:%a %d %b}</b> — {left} left of {len(sec['items'])}\n\n"
+            f"{html.escape(self.doc.describe(sec))}",
+            parse_mode=ParseMode.HTML)
 
     async def cmd_tasks(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
@@ -2609,6 +2655,7 @@ class LockstepBot:
             return
         await update.message.chat.send_action("typing")
         try:
+            await self._load_doc(now)
             note = self._reject_note(now)
             waiting = self.pending.get(update.effective_chat.id) or {}
             if waiting.get("action") == "plan_proposal":
@@ -3308,6 +3355,7 @@ class LockstepBot:
             ("latenight", self.cmd_latenight), ("outside", self.cmd_outside),
             ("steps", self.cmd_steps),
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
+            ("doc", self.cmd_doc), ("today2", self.cmd_doc),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup), ("paper", self.cmd_paper),

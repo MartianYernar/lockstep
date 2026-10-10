@@ -45,17 +45,39 @@ def _note_battery(request: web.Request, engine, now) -> None:
     engine.db.set_lock(**fields)
 
 
+def _open_tasks(db) -> int | None:
+    """None rather than a 500: the table only exists once the coach has run."""
+    try:
+        return db.one("SELECT COUNT(*) c FROM tasks WHERE status='open'")["c"]
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
 def build_app(cfg, engine, ledger) -> web.Application:
     token = cfg.api["token"]
     app = web.Application()
 
     async def health(_request: web.Request) -> web.Response:
+        """Unauthenticated, so it says what is switched on and nothing more.
+
+        10 Oct 2026: after a rebuild there was no way to tell from outside
+        whether the container had picked up the new config, and the volume's
+        SFTP was timing out. These booleans answer that in one curl and give
+        away nothing -- no ids, no paths, no tokens.
+        """
         ok, bad = ledger.verify()
+        lock = engine.db.lock()
         return web.json_response({
             "status": "ok",
             "time": cfg.now().isoformat(),
             "ledger_intact": ok,
             "ledger_break_at": bad,
+            "armed": bool(lock["enabled"]),
+            "guardian_registered": bool(lock["guardian_chat_id"]),
+            "commitment_end": lock["commitment_end"],
+            "daily_doc": bool((cfg.raw.get("daily_doc") or {}).get("enabled")
+                              and (cfg.raw.get("daily_doc") or {}).get("url")),
+            "open_tasks": _open_tasks(engine.db),
         })
 
     async def state(request: web.Request) -> web.Response:

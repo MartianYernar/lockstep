@@ -175,6 +175,8 @@ class Coach:
         self.last_latenight: str | None = None
         self.last_make_plan: dict | None = None
         self.last_lock_plan = False
+        # Filled in before each reply by the bot, which owns the fetching.
+        self.doc_today = ""
         self.last_on_paper: str | None = None
 
     # -- config ---------------------------------------------------------------
@@ -335,6 +337,14 @@ class Coach:
             night = self.foundations.night_of(now)
             out.append("Tonight's basics (end-of-day checklist): "
                        + self.foundations.describe(night))
+
+        if getattr(self, "doc_today", ""):
+            out.append("HIS LIST FOR TODAY, from his own doc "
+                       "([x] = he has ticked it off):")
+            out.append(self.doc_today)
+            out.append("That list is what he planned for himself. It is not "
+                       "proof -- only photos are -- but it is what he means to "
+                       "do, so talk about today from it.")
 
         big = self.tasks.describe(day)
         out.append("His big tasks (the long-running ones):")

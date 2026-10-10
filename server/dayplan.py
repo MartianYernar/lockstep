@@ -66,7 +66,11 @@ HOW TO CHOOSE WHAT GOES IN THE FREE TIME:
   8pm", "I'm wiped", "SAT first"), it shapes this plan. A deadline tonight
   means that task goes first and ends before the deadline.
 - Never invent a class, lesson, meeting or event. Only put in fixed things he
-  wrote or that are in the FIXED list."""
+  wrote or that are in the FIXED list.
+- HIS LIST FOR TODAY, if one is below, is what he decided this day is for. The
+  unticked lines are the work; build the blocks out of them, in his words, and
+  group related ones into a single block rather than making a block per line.
+  Ticked lines are already done -- never plan them again."""
 
 BUILD = """TODAY IS {today}. This plan is for {day} ({weekday}).
 The enforced window is {start}-{end}. He must be doing something the whole time.
@@ -77,7 +81,7 @@ WHAT HE SAID:
 HIS BIG TASKS, most urgent first:
 {agenda}
 
-{events}{steps}{chat}
+{events}{steps}{doc}{chat}
 Build the plan. If he fixed some hours, keep them exactly and fill the rest."""
 
 # 21 Sep: every "change X" re-sent the whole old plan as if he had typed it,
@@ -99,7 +103,7 @@ What he asked for in the first place:
 HIS BIG TASKS, most urgent first:
 {agenda}
 
-{events}{chat}
+{events}{doc}{chat}
 Make his change. Keep every other block as it was unless the change forces it
 to move; if it does, move the fewest blocks you can -- and never past a
 task's deadline (check the chat for a time today). If his change can't be done
@@ -155,11 +159,13 @@ class Proposals:
 
 
 class DayPlanner:
-    def __init__(self, coach, cfg, db, agenda):
+    def __init__(self, coach, cfg, db, agenda, doc=None):
         self.coach = coach
         self.cfg = cfg
         self.db = db
         self.agenda = agenda
+        self.doc = doc
+        self._doc_text = ""
 
     def _events(self, day: date) -> str:
         rows = self.db.q(
@@ -216,6 +222,22 @@ class DayPlanner:
         lines = "\n".join(f"  {r['label']}: {r['answer']}" for r in rows)
         return f"WHERE HE LEFT OFF (his own words, at the last checks):\n{lines}\n\n"
 
+    async def _doc_section(self, day: date, now: datetime) -> str:
+        """His own list for that day, from the Google Doc. "" if there is none."""
+        doc = getattr(self, "doc", None)
+        if doc is None or not doc.enabled:
+            return ""
+        try:
+            sec = await doc.for_day(day, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("doc lookup failed: %s", exc)
+            return ""
+        body = doc.describe(sec)
+        if not body:
+            return ""
+        return ("HIS LIST FOR THAT DAY, written by him in his doc "
+                "([x] = already done, do not plan it again):\n" + body + "\n\n")
+
     async def build(self, day: date, text: str, now: datetime, tries: int = 2,
                     current: str | None = None, change: str | None = None
                     ) -> tuple[list, str]:
@@ -229,11 +251,13 @@ class DayPlanner:
         hhmm = lambda m: f"{m//60:02d}:{m%60:02d}"            # noqa: E731
         system = SYSTEM.format(name=self.cfg.user_name, start=hhmm(start), end=hhmm(end))
         said = (text or "").strip()
+        self._doc_text = await self._doc_section(day, now)
         common = dict(
             today=f"{now:%A %d %B %Y}", day=day.isoformat(), weekday=f"{day:%A}",
             start=hhmm(start), end=hhmm(end),
             agenda=self.agenda.for_planner(now.date()) or "  (no big tasks saved)",
-            events=self._events(day), chat=self._chat(now))
+            events=self._events(day), chat=self._chat(now),
+            doc=self._doc_text)
         if current and change:
             prompt = REVISE.format(current=current, change=change.strip(),
                                    text=said or "(he asked you to build the day)", **common)
