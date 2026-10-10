@@ -398,7 +398,8 @@ class Validator:
                     if with_thinking and "INVALID_ARGUMENT" in text:
                         continue
                     if any(k in text for k in ("RESOURCE_EXHAUSTED", "429",
-                                               "UNAVAILABLE", "503", "INVALID_ARGUMENT")):
+                                               "UNAVAILABLE", "503", "INTERNAL", "500",
+                                               "INVALID_ARGUMENT")):
                         log.warning("%s unusable (%s), trying the next model",
                                     model, text.split(".")[0][:40])
                         break

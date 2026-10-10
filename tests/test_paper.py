@@ -172,4 +172,31 @@ u = photo()
 run(bot.on_photo(u, None))
 check("no /paper offer", "/paper" in u.message.last, False)
 
+print("\n=== /paper still works after the plan was rewritten ===")
+# 10 Oct 16:24. He replanned, then asked for paper mode, and was told the
+# block "already wants a photo" while the siren kept demanding a Cold Turkey
+# screenshot. replace_blocks had re-created every block row, so the update --
+# keyed on block_id -- matched nothing at all.
+cfg, db, led, eng, bot = make(N(16, 1))
+run(bot.cmd_replan(FakeUpdate(
+    "/replan\n16:01-18:00 work: replace Activity of May in CAS site\n"
+    "18:00-22:00 work: essay"), None))
+opens = db.q("SELECT id, kind, state, block_id FROM checkpoints WHERE date=?"
+             " AND state IN ('scheduled','asked','overdue') AND kind LIKE 'blocker%'",
+             (DAY.isoformat(),))
+check("there is a blocker check to flip", len(opens) > 0, True)
+check("and it points at a block that exists",
+      all(c["block_id"] in [b["id"] for b in db.blocks(DAY)] for c in opens), True)
+
+u = FakeUpdate("/paper")
+run(bot.cmd_paper(u, None))
+check("paper mode is applied, not waved away", "on paper" in u.message.last, True)
+check("the blocker check inside that block became a photo check",
+      db.one("SELECT COUNT(*) c FROM checkpoints WHERE date=? AND kind LIKE 'blocker%'"
+             " AND state IN ('scheduled','asked','overdue') AND due_at < ?",
+             (DAY.isoformat(), N(18, 0).isoformat()))["c"], 0)
+check("and the evening block, which he said nothing about, still wants its screenshot",
+      db.one("SELECT COUNT(*) c FROM checkpoints WHERE date=? AND kind LIKE 'blocker%'"
+             " AND due_at >= ?", (DAY.isoformat(), N(18, 0).isoformat()))["c"] > 0, True)
+
 sys.exit(report("PAPER TESTS"))

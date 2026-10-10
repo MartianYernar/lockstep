@@ -752,6 +752,7 @@ class LockstepBot:
         self.db.ensure_day(target)
         before = self._open_checks(target)
         self.db.replace_blocks(target, [b.as_tuple() for b in blocks])
+        self._relink_checks(target)
         self.db.run(
             "UPDATE days SET plan_locked = 1, plan_submitted_at = ?, checkpoints_built = 0"
             " WHERE date = ?", (now.isoformat(), target.isoformat()))
@@ -838,6 +839,25 @@ class LockstepBot:
             return
         await self._accept_replan(update, body)
 
+    def _relink_checks(self, day: date) -> None:
+        """Point checkpoints at the blocks that now cover them.
+
+        replace_blocks deletes and re-inserts every row, so after a rewrite
+        every checkpoint holds a block_id that no longer exists. Anything
+        keyed on it then silently does nothing: /paper reported "already
+        wants a photo" while the open check went on demanding a Cold Turkey
+        screenshot, 10 Oct 16:24.
+        """
+        blocks = self.db.blocks(day)
+        for cp in self.db.q("SELECT id, due_at FROM checkpoints WHERE date = ?"
+                            " AND kind != 'bed'", (day.isoformat(),)):
+            due = datetime.fromisoformat(cp["due_at"])
+            minute = due.hour * 60 + due.minute
+            blk = next((x for x in blocks
+                        if x["start_min"] <= minute < x["end_min"]), None)
+            self.db.run("UPDATE checkpoints SET block_id = ? WHERE id = ?",
+                        (blk["id"] if blk else None, cp["id"]))
+
     def _open_checks(self, day: date) -> list[dict]:
         """Open checkpoints with the label they were asked about."""
         return [dict(r) for r in self.db.q(
@@ -905,6 +925,7 @@ class LockstepBot:
         rows += [(max(b.start_min, minute), b.end_min, b.label, b.category)
                  for b in blocks if b.end_min > minute]
         self.db.replace_blocks(today, rows)
+        self._relink_checks(today)
         self.db.run(
             "DELETE FROM checkpoints WHERE date=? AND state='scheduled' AND due_at > ?",
             (today.isoformat(), now.isoformat()))
@@ -1605,10 +1626,18 @@ class LockstepBot:
                 "which block? you're not in one right now — <code>/paper math</code>",
                 parse_mode=ParseMode.HTML)
             return
+        # By the block's minutes, not its id: a block id is rewritten by every
+        # replan, and a /paper that matches nothing is worse than useless --
+        # it says "that already wants a photo" while the siren goes on asking
+        # for a screenshot.
+        lo = datetime.combine(today, datetime.min.time(), tzinfo=now.tzinfo).replace(
+            hour=blk["start_min"] // 60, minute=blk["start_min"] % 60)
+        hi = lo + timedelta(minutes=blk["end_min"] - blk["start_min"])
         n = self.db.run(
-            "UPDATE checkpoints SET kind='activity' WHERE date=? AND block_id=?"
-            " AND kind LIKE 'blocker%' AND state IN ('scheduled','asked','overdue')",
-            (today.isoformat(), blk["id"])).rowcount
+            "UPDATE checkpoints SET kind='activity' WHERE date=?"
+            " AND kind LIKE 'blocker%' AND state IN ('scheduled','asked','overdue')"
+            " AND due_at >= ? AND due_at < ?",
+            (today.isoformat(), lo.isoformat(), hi.isoformat())).rowcount
         if not n:
             await update.message.reply_text(
                 f"<b>{html.escape(blk['label'])}</b> already wants a photo, not a "

@@ -428,11 +428,15 @@ class Coach:
                     text = str(exc)
                     if with_thinking and "INVALID_ARGUMENT" in text:
                         continue
-                    # Out of allowance (429), busy (503), or refusing the
-                    # request shape (400): all mean "ask a different model".
-                    # Walking the chain IS the coach's retry loop.
+                    # Out of allowance (429), busy (503), broken on their side
+                    # (500 INTERNAL), or refusing the request shape (400): all
+                    # mean "ask a different model". Walking the chain IS the
+                    # coach's retry loop. 10 Oct a 500 was not in this list, so
+                    # a transient fault on one model became "something broke on
+                    # my end" while three other models sat there working.
                     if any(k in text for k in ("RESOURCE_EXHAUSTED", "429", "UNAVAILABLE",
-                                               "503", "INVALID_ARGUMENT", "400")):
+                                               "503", "INTERNAL", "500",
+                                               "INVALID_ARGUMENT", "400")):
                         log.warning("coach: %s unusable (%s), next model",
                                     model, text.split(".")[0][:40])
                         break
