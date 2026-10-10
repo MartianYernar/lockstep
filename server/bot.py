@@ -1100,13 +1100,40 @@ class LockstepBot:
                 total += end - start
         return total
 
+    @staticmethod
+    def _meal_minutes(rows, since: int) -> int:
+        total = 0
+        for start, end, label in rows:
+            start = max(start, since)
+            if end > start and planner.categorise(label) == "meal":
+                total += end - start
+        return total
+
+    def _lost_work(self, old, new, since: int) -> int:
+        """Work minutes a rewrite takes away, with a meal's worth forgiven.
+
+        10 Oct 2026, in his words: "the bot isn't letting me eat". Moving work
+        aside for dinner reads to the guard exactly like moving it aside for
+        nothing, and the judge is told to refuse "I need a break" -- so food
+        had to be argued for. A body is not a negotiation. The first
+        `friend.meal_grace_min` minutes that a rewrite hands to a meal are not
+        counted as lost, so a normal dinner goes through in silence. Beyond
+        that it is a two-hour dinner, and that is a real question again.
+        """
+        lost = self._work_minutes(old, since) - self._work_minutes(new, since)
+        if lost <= 0:
+            return lost
+        grace = int((self.cfg.raw.get("friend", {}) or {}).get("meal_grace_min", 45))
+        added = max(0, self._meal_minutes(new, since) - self._meal_minutes(old, since))
+        return lost - min(added, grace)
+
     async def _ask_why(self, update: Update, kind: str, day: date, text: str,
                        old, new, since: int) -> bool:
         """True if the rewrite is on hold until he explains it."""
         conf = self.cfg.raw.get("friend", {}) or {}
         if not conf.get("guard_rewrites", True):
             return False
-        lost = self._work_minutes(old, since) - self._work_minutes(new, since)
+        lost = self._lost_work(old, new, since)
         if lost < int(conf.get("rewrite_min_lost", 10)):
             return False
         gone = [l for (_, e, l) in old if e > since and self._important(l)
@@ -2781,8 +2808,7 @@ class LockstepBot:
             return False
         old = [(b["start_min"], b["end_min"], b["label"]) for b in self.db.blocks(day)]
         since = (now.hour * 60 + now.minute) if day == now.date() else 0
-        lost = self._work_minutes(old, since) - self._work_minutes(new, since)
-        return lost >= int(conf.get("rewrite_min_lost", 10))
+        return self._lost_work(old, new, since) >= int(conf.get("rewrite_min_lost", 10))
 
     async def _recheck_after_swap(self, update: Update, now: datetime) -> None:
         """The plan now says he's doing what the rejected photo showed. Look again.
