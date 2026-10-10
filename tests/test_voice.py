@@ -85,7 +85,8 @@ check("it went out in his voice",
 # it needs". Friday writes the message; the app spells out the requirement
 # underneath, so a friendly phrasing can never drop the details.
 needs = sent(bot)[0].split("📸 needs: ")[1]
-check("the app spells out what the photo must show", "work: physics IA" in needs, True)
+check("the app spells out what the photo must show", "physics IA" in needs, True)
+check("without the work: tag on the front", "work:" in needs, False)
 check("including the clock", "clock" in needs, True)
 check("and the actual deadline, not a duration", "by 16:03" in needs, True)
 check("and the privacy rule", "no face" in needs, True)

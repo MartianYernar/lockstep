@@ -380,7 +380,16 @@ class Engine:
         start, end = self.window(day)
         gap = int(self.cfg.raw.get("proof", {}).get("shot_gap_min", 1))
         out: list[tuple[int, int | None, str]] = []
+        meal_free = int((self.cfg.raw.get("friend", {}) or {}).get("meal_grace_min", 45))
         for b in self.db.blocks(day):
+            # A photo of dinner proves nothing, and asking for one sounded the
+            # siren in the middle of the meal (10 Oct 20:07: "if I send u image
+            # of food, can u stop it"). A short meal is proof-free. A long one
+            # is a question, and the rewrite guard already asks it whenever a
+            # meal grows out of work time.
+            if (b["category"] == "meal"
+                    and b["end_min"] - b["start_min"] <= meal_free):
+                continue
             lo = max(b["start_min"], start)
             if lo >= end:
                 continue

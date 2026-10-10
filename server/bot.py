@@ -297,11 +297,15 @@ class LockstepBot:
                 reply_markup=self._keyboard(update))
             return
         await update.message.reply_text(
-            "during the window just send me the photo, that's it.\n\n"
+            "during the window just send me a photo of you doing it, clock in shot. "
+            "a photo of your laptop with the work on it counts.\n\n"
             "<b>The day</b>\n"
             "/goals — the 3-5 things tomorrow is for\n"
             "/plan — tomorrow's timetable · /done 2 — tick a goal off\n"
+            "/doc — what I read in your google doc for today\n"
             "/steps — break this task into steps · /today · /status\n\n"
+            "<b>Food</b>\n"
+            "/eat 15 — or just say \"eating 15 min\". no pic needed for food\n\n"
             "<b>Big stuff</b>\n"
             "/tasks — your big tasks · /task add Physics IA due 15 oct\n"
             "/events — meetings coming up · /remind 3 sep 14:40 dentist\n"
@@ -840,6 +844,99 @@ class LockstepBot:
                 parse_mode=ParseMode.HTML)
             return
         await self._accept_replan(update, body)
+
+    MEAL_WORDS = re.compile(r"\b(eat|eating|food|lunch|dinner|breakfast|snack|"
+                            r"поесть|поем|кушать|покушаю|обед|ужин)\b", re.I)
+    NOW_WORDS = re.compile(r"\b(now|rn|right now|lemme|let me|imma|i'?m gonna|gonna|"
+                           r"going to|сейчас|щас)\b", re.I)
+    MINUTES = re.compile(r"(\d{1,3})\s*(?:m\b|min|mins|minute|minutes|мин)", re.I)
+
+    def _meal_request(self, text: str) -> int | None:
+        """Minutes, if this is "I'm going to eat now" in any of his phrasings.
+
+        Not a question ("what should i eat?"), not the past ("i ate"), and only
+        with a time or a now-word, so "food for thought" stays chat.
+        """
+        t = (text or "").strip()
+        if not t or "?" in t or len(t) > 80 or not self.MEAL_WORDS.search(t):
+            return None
+        m = self.MINUTES.search(t)
+        if m:
+            return int(m.group(1))
+        return 20 if self.NOW_WORDS.search(t) else None
+
+    async def _quick_meal(self, update: Update, minutes: int) -> bool:
+        """Carve a meal out of now, without asking anybody to approve food.
+
+        The current block is paused for the meal and resumes after it; nothing
+        later moves. It goes through the ordinary replan door -- the guard sees
+        a meal inside its allowance and lets it through without a question.
+        Returns False when there is no locked day running to change, so the
+        message falls through to Friday as before.
+        """
+        now = self.cfg.now()
+        today, minute = now.date(), now.hour * 60 + now.minute
+        if not self.engine.has_plan(today) or not self.engine.in_window(now):
+            return False
+        _, end = self.engine.window(today)
+        cap = int((self.cfg.raw.get("friend", {}) or {}).get("meal_grace_min", 45))
+        minutes = max(5, min(int(minutes), cap, end - minute))
+        if minutes < 5:
+            return False
+        stop = minute + minutes
+        rows = [(minute, stop, "eat")]
+        resume = None
+        for b in self.db.blocks(today):
+            if b["end_min"] <= minute:
+                continue
+            s, e = max(b["start_min"], minute), b["end_min"]
+            if e <= stop:
+                continue                     # swallowed by the meal
+            if s < stop:
+                s = stop
+                resume = resume or b["label"]
+            rows.append((s, e, b["label"]))
+        text = "\n".join(f"{s//60:02d}:{s%60:02d}-{e//60:02d}:{e%60:02d} {lbl}"
+                         for s, e, lbl in rows)
+        mark = self._ledger_mark()
+        await self._accept_replan(update, text)
+        if not self._plan_changed_since(mark):
+            self._app_note(now, f"he asked to eat for {minutes} min; the change was NOT "
+                                "applied")
+            return True
+        back = f"{stop//60:02d}:{stop%60:02d}"
+        self._app_note(now, f"he is eating {minutes} min, until {back}; no photo is "
+                            "needed for the meal" + (f", then back to {resume}" if resume
+                                                     else ""))
+        await update.message.reply_text(
+            f"enjoy 🍽 {minutes} min, no pic needed for food. "
+            + (f"back to {resume} at {back}." if resume else f"see you at {back}."))
+        return True
+
+    async def cmd_eat(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/eat [minutes] -- the same as saying it."""
+        if not self._is_user(update):
+            return
+        arg = update.message.text.partition(" ")[2].strip()
+        mins = int(arg) if arg.isdigit() else 20
+        if not await self._quick_meal(update, mins):
+            await update.message.reply_text(
+                "nothing's running right now, so just go eat 🍽")
+
+    CLAIM_VERB = re.compile(r"\b(switched|swapped|added|moved|shifted|pushed|grabbed|"
+                            r"slotted|carved|trimmed|squeezed|made room|put (?:it|in)|"
+                            r"changed)\b", re.I)
+    TIME_WORD = re.compile(r"\b(min|mins|minutes|hour|hours|block|plan|schedule)\b|"
+                           r"\d{1,2}:\d{2}", re.I)
+
+    def _claims_change(self, reply: str) -> bool:
+        """Does this sentence say the day was rearranged?"""
+        if "📌" in reply:                 # it saved a task or an event; not a schedule
+            return False
+        for sentence in re.split(r"[.!\n]", reply):
+            if self.CLAIM_VERB.search(sentence) and self.TIME_WORD.search(sentence):
+                return True
+        return False
 
     def _ledger_mark(self) -> int:
         row = self.db.one("SELECT MAX(id) m FROM events")
@@ -2776,6 +2873,14 @@ class LockstepBot:
             await self._handle_disable_reason(update, text)
             return
 
+        # "lemme eat for 10 min" is a schedule change with one obvious shape.
+        # It is done here, exactly, instead of being handed to a model that
+        # on 10 Oct answered "grabbed 10 mins for food" and changed nothing.
+        if self._is_user(update):
+            mins = self._meal_request(text)
+            if mins is not None and await self._quick_meal(update, mins):
+                return
+
         # A bare plan pasted with no command is still obviously a plan.
         if self._is_user(update) and "\n" in text and planner.LINE_RE.match(text.splitlines()[0]):
             await self._accept_plan(update, self.target_plan_date(self.cfg.now()), text)
@@ -2893,6 +2998,16 @@ class LockstepBot:
         edits, self.coach.last_plan_edits = self.coach.last_plan_edits, []
         prepared = self._prepare_chat_plan(edits[0], now, said=text) if edits else None
         if prepared is None:
+            if out and self._claims_change(out):
+                # It said it moved time around and asked the app to do
+                # nothing. 10 Oct 20:06: "grabbed 10 mins for food" -- no
+                # replan, the siren kept going, and the next reply was "I
+                # literally can't stop it". Say what is true instead.
+                self._app_note(now, "your last reply claimed a schedule change but "
+                                    "none was made -- the plan is unchanged")
+                out += ("\n\n(heads up: that didn't actually change the plan. "
+                        "tell me the times, or for food just say \"eat 15 min\", "
+                        "and it's done.)")
             if out:
                 await update.message.reply_text(out[:3900])
             else:
@@ -3361,7 +3476,8 @@ class LockstepBot:
                 f"screenshot of {blocker} running, taskbar clock visible"
                 if kind.startswith("blocker") else
                 "photo of your bed, opened, ready to sleep in" if kind == "bed" else
-                f"photo of you doing \"{p['label']}\", with a clock or phone "
+                f"photo of you doing \"{re.sub(r'(?i)^[ ]*work:[ ]*', '', p['label'])}\", "
+                "with a clock or phone "
                 "time in the shot")
                 + f" — by {deadline:%H:%M}")
             if kind == "activity":
@@ -3568,6 +3684,7 @@ class LockstepBot:
             ("steps", self.cmd_steps),
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
             ("doc", self.cmd_doc), ("today2", self.cmd_doc),
+            ("eat", self.cmd_eat), ("food", self.cmd_eat),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup), ("paper", self.cmd_paper),

@@ -121,8 +121,11 @@ seen = model(bot, {"reply": "yeah go eat", "actions": [
      "plan": "18:30-19:00 dinner\n19:00-22:00 work: uni essay"}]})
 u = FakeUpdate("bro i'm starving, gonna eat now")
 run(bot.on_text(u, None))
-check("Friday's answer reaches him", any("eat" in r for r in u.message.replies), True)
-check("the plan changed", "dinner" in " ".join(labels(db)), True)
+# Since 11 Oct the app does this itself rather than hoping a model emits the
+# right action -- 10 Oct 20:06 it said "grabbed 10 mins for food" and didn't.
+check("he is answered", any("eat" in r or "🍽" in r for r in u.message.replies), True)
+check("the plan changed", "eat" in labels(db), True)
+check("without asking a model", seen["n"], 0)
 check("and he was never asked why he eats",
       any("why" in r.lower() for r in u.message.replies), False)
 
