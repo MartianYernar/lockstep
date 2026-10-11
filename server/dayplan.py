@@ -171,15 +171,27 @@ class DayPlanner:
         self.doc = doc
         self._doc_text = ""
 
+    def _routines(self, day: date) -> str:
+        r = getattr(self.coach, "routines", None)
+        rows = r.for_day(day) if r is not None else []
+        if not rows:
+            return ""
+        return "\n".join(f"  {x['start_min']//60:02d}:{x['start_min']%60:02d}-"
+                         f"{x['end_min']//60:02d}:{x['end_min']%60:02d} {x['label']}"
+                         for x in rows) + "\n"
+
     def _events(self, day: date) -> str:
         rows = self.db.q(
             "SELECT at_ts, text FROM reminders WHERE at_ts >= ? AND at_ts < ?"
             " ORDER BY at_ts",
             (f"{day}T00:00", f"{day}T23:59"))
-        if not rows:
+        fixed = self._routines(day)
+        if not rows and not fixed:
             return ""
         lines = "\n".join(f"  {r['at_ts'][11:16]} {r['text']}" for r in rows)
-        return f"FIXED THAT DAY -- plan around these, they are not optional:\n{lines}\n\n"
+        return ("FIXED THAT DAY -- plan around these, they are not optional (his weekly "
+                "routine and his events; use exactly these labels and times):\n"
+                + fixed + lines + "\n\n")
 
     def _chat(self, now: datetime) -> str:
         """Today's conversation with Friday -- where "the IA moved to 8pm" lives.
@@ -283,6 +295,9 @@ class DayPlanner:
             try:
                 blocks, note = self._parse(raw)
                 blocks = self._keep_his_switch(blocks, his)
+                routines = getattr(self.coach, "routines", None)
+                if routines is not None:
+                    blocks = routines.overlay(day, blocks, start, end, planner)
                 planner.validate_coverage(blocks, start, end)
                 return blocks, note
             except planner.PlanError as exc:

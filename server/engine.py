@@ -93,6 +93,16 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def _routine_photo_free(self, day: date, b) -> bool:
+        try:
+            rows = self.db.q("SELECT * FROM routines WHERE active=1 AND photo=0")
+        except Exception:                                     # noqa: BLE001
+            return False
+        wd = str(day.weekday())
+        return any(wd in r["days"].split(",") and r["label"] == b["label"]
+                   and r["start_min"] < b["end_min"] and b["start_min"] < r["end_min"]
+                   for r in rows)
+
     def retire_blocker_checks(self) -> int:
         """With screenshots switched off, an already-scheduled one is a demand
         nothing can meet. Turn every open one into an ordinary photo check.
@@ -389,6 +399,11 @@ class Engine:
             # meal grows out of work time.
             if (b["category"] == "meal"
                     and b["end_min"] - b["start_min"] <= meal_free):
+                continue
+            # His fixed weekly commitments -- teaching, the commute home -- are
+            # not proved by photo: he didn't choose them over work, and a photo
+            # of a classroom is a photo of other people's faces.
+            if self._routine_photo_free(day, b):
                 continue
             lo = max(b["start_min"], start)
             if lo >= end:

@@ -166,6 +166,8 @@ class Coach:
         from .tasks import Tasks, Terms
         self.tasks = Tasks(db)
         self.terms = Terms(db)
+        from .routines import Routines
+        self.routines = Routines(db)
         from .foundations import Foundations
         self.foundations = Foundations(db, cfg)
         from .standup import Standups
@@ -345,6 +347,11 @@ class Coach:
             out.append("That list is what he planned for himself. It is not "
                        "proof -- only photos are -- but it is what he means to "
                        "do, so talk about today from it.")
+
+        fixed = self.routines.describe()
+        out.append("His fixed weekly routine (the app writes these into every plan by "
+                   "itself, no photo needed):")
+        out.append(fixed or "  none saved.")
 
         big = self.tasks.describe(day)
         out.append("His big tasks (the long-running ones):")
@@ -721,6 +728,29 @@ class Coach:
                     self.db.run("INSERT INTO reminders (at_ts, text, created_at)"
                                 " VALUES (?, ?, ?)", (when.isoformat(), what, now.isoformat()))
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
+                elif kind == "add_routine":
+                    from .routines import parse_days, parse_span
+                    days = parse_days(a.get("day") or a.get("date") or "")
+                    span = parse_span(a.get("time") or a.get("text") or "")
+                    what = (a.get("title") or a.get("text") or "").strip()
+                    if not days or not span or not what:
+                        done.append("⚠️ didn't catch the days and times for that "
+                                    "routine — like \"weekends 10:00-11:00 teaching\"")
+                        continue
+                    self.routines.add(days, span[0], span[1], what, now)
+                    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                    when = ("weekends" if days == [5, 6] else
+                            "weekdays" if days == [0, 1, 2, 3, 4] else
+                            ",".join(names[d] for d in days))
+                    done.append(f"routine saved: {when} {span[0]//60:02d}:{span[0]%60:02d}-"
+                                f"{span[1]//60:02d}:{span[1]%60:02d} {what} — goes in "
+                                "every plan, no photo")
+                elif kind == "remove_routine":
+                    ref = (a.get("task") or a.get("text") or "").strip().lower().lstrip("r#")
+                    if ref.isdigit() and self.routines.remove(int(ref)):
+                        done.append("routine removed")
+                    else:
+                        done.append("⚠️ which routine? (r1, r2...)")
                 elif kind == "remember":
                     what = (a.get("text") or "").strip()
                     if not what:
@@ -822,6 +852,16 @@ actually told you, never guessed:
   see his to-do list, tasks, events, deadlines or "everything". The app
   appends the real list from the database. Your reply is ONE short line
   ("here's everything:") -- never write the list yourself.
+- {"type":"add_routine","day":"weekends"/"weekdays"/"sat,sun"/"mon wed",
+  "time":"HH:MM-HH:MM","title":"what it is"}  when he tells you about something
+  he does at a FIXED time EVERY week: a job, teaching, a class, a commute
+  ("I teach 10-11 on weekends, then I'm on the road till 12"). One action per
+  time slot. The app then puts it into every plan by itself.
+- {"type":"remove_routine","task":"r3"}  he says one of those stopped.
+- When he tells you where he is RIGHT NOW and until when ("I'm out teaching
+  till 11"), and then asks for a plan, put that in make_plan's "text" with
+  times ("teaching until 11:00, commute 11:00-12:00") -- never plan work over
+  hours he has told you he is somewhere else.
 - {"type":"remember","text":"one plain fact"}  anything lasting he tells you
   that is not a task or an event: an exam date, what he submitted, a
   preference, a person, how his school works. Short, in your words, dated
@@ -901,7 +941,8 @@ REPLY_SCHEMA = {
                     "add_event", "add_task", "complete_task", "set_due", "add_note",
                     "edit_plan", "define", "recheck_photo", "tick_basic",
                     "start_latenight", "make_plan", "on_paper", "lock_plan",
-                    "rename_task", "drop_task", "show_list", "remember", "forget"]},
+                    "rename_task", "drop_task", "show_list", "remember", "forget",
+                    "add_routine", "remove_routine"]},
                 "days": {"type": "INTEGER"},
                 "day": {"type": "STRING"}, "plan": {"type": "STRING"},
                 "task": {"type": "STRING"}, "title": {"type": "STRING"},

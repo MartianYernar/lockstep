@@ -59,6 +59,7 @@ class LockstepBot:
         self.proposals = Proposals(db)
         try:
             self.coach.terms.seed(cfg.raw.get("terms"), cfg.now())
+            self.coach.routines.seed(cfg.raw.get("routines"), cfg.now())
         except Exception as exc:                              # noqa: BLE001
             log.warning("term seed failed: %s", exc)
         # The last photo the checker turned down, held in memory only, so he can
@@ -1212,7 +1213,10 @@ class LockstepBot:
         self.coach.remember(now.date(), now, "user", "[tapped the lock button]")
         mark = self._ledger_mark()
         await self._accept_plan(_Reply(q, chat), day, row["text"])
+        waiting = (self.pending.get(chat) or {})
         self._app_note(now, "that plan is now locked" if self._plan_changed_since(mark)
+                       else "the plan he tapped is waiting for his goals; it locks the "
+                            "moment he sends them" if waiting.get("then_plan")
                        else "the plan he tapped was NOT locked -- it was held for a "
                             "reason or refused; the old plan still stands")
 
