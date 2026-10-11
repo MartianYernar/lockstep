@@ -176,8 +176,21 @@ class Routines:
         Whatever the model produced, the fixed hours come out right: this is
         arithmetic, not a request.
         """
+        # A quiet window wins any overlap: 18 Oct is a Sunday, so the weekly
+        # 10-11 teaching slot sits inside the 10-15 exam, and writing both in
+        # produced two blocks at the same time -- which the coverage check
+        # rejects, so the day could not be built at all.
+        rows = sorted(self.for_day(day), key=lambda r: (0 if r["quiet"] else 1,
+                                                        r["start_min"]))
+        kept = []
+        for r in rows:
+            if any(k["start_min"] < r["end_min"] and r["start_min"] < k["end_min"]
+                   for k in kept):
+                continue
+            kept.append(r)
         fixed = [(max(r["start_min"], start), min(r["end_min"], end), r["label"])
-                 for r in self.for_day(day) if r["end_min"] > start and r["start_min"] < end]
+                 for r in sorted(kept, key=lambda r: r["start_min"])
+                 if r["end_min"] > start and r["start_min"] < end]
         if not fixed:
             return blocks
         out = []

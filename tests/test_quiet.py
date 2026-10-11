@@ -106,8 +106,54 @@ check("an hour and a half before, it is not", eng.quiet_soon(N(8, 30)), False)
 check("inside, yes", eng.quiet_soon(N(13, 0)), True)
 check("after, no", eng.quiet_soon(N(15, 30)), False)
 
+print("\n=== an exam day plans itself ===")
+# "make exam days plan themselves": the bot is silent through the exam, but a
+# day with no plan sirens the moment its window opens, and the night before an
+# exam is exactly when he forgets to write one.
+cfg, db, led, eng, bot = make(now=N(9, 15))
+
+
+async def planner_ask(system, contents, now, max_tokens=400, schema=None, tier=None):
+    bot.coach._charge(now.date())
+    planner_ask.saw = "\n".join(str(c) for c in contents)
+    return json.dumps({"blocks": [
+        {"start": "10:00", "end": "15:00", "label": "IELTS exam"},
+        {"start": "15:00", "end": "22:00", "label": "rest and uni applications"}],
+        "note": "exam first"})
+bot.coach._ask = planner_ask
+run(bot._friend_tick(N(9, 15)))
+check("the day is planned without being asked",
+      [b["label"] for b in db.blocks(EXAM)][:1], ["IELTS exam"])
+check("and locked", eng.has_plan(EXAM), True)
+check("the exam hours are exactly his",
+      (db.blocks(EXAM)[0]["start_min"], db.blocks(EXAM)[0]["end_min"]), (600, 900))
+check("the planner was told the exam is fixed", "IELTS exam" in planner_ask.saw, True)
+check("he is told, and told how to change it",
+      any("I've written it" in t and "/replan" in t for t in bot.app.bot.to(1)), True)
+check("goals exist too, so it could lock", len(db.goals(EXAM)), 3)
+check("it is on the record", db.one(
+    "SELECT COUNT(*) c FROM events WHERE kind='exam_day_planned'")["c"], 1)
+check("and still nothing is asked during the exam", db.one(
+    "SELECT COUNT(*) c FROM checkpoints WHERE date=? AND due_at < ?",
+    (EXAM.isoformat(), N(15, 0).isoformat()))["c"], 0)
+run(bot._friend_tick(N(9, 20)))
+check("it does not do it twice", db.one(
+    "SELECT COUNT(*) c FROM events WHERE kind='exam_day_planned'")["c"], 1)
+
+print("\n=== a plan he wrote himself is never overwritten ===")
+cfg, db, led, eng, bot = make(now=N(9, 15))
+db.replace_blocks(EXAM, [b.as_tuple() for b in planner.parse(
+    "10:00-15:00 IELTS exam\n15:00-22:00 sleep it off")])
+db.run("UPDATE days SET plan_locked=1 WHERE date=?", (EXAM.isoformat(),))
+bot.coach._ask = planner_ask
+run(bot._friend_tick(N(9, 15)))
+check("his own plan stands", [b["label"] for b in db.blocks(EXAM)][1], "sleep it off")
+
 print("\n=== the day after is a normal day ===")
 cfg, db, led, eng, bot = make(now=N(11, 0, 19))
+bot.coach._ask = planner_ask
+run(bot._friend_tick(N(9, 15, 19)))
+check("no quiet window, so no automatic plan", eng.has_plan(date(2026, 10, 19)), False)
 check("no quiet window on the 19th", eng.quiet_now(N(11, 0, 19)), None)
 check("and 10-11 teaching is still a weekend thing only",
       [r["label"] for r in bot.coach.routines.for_day(date(2026, 10, 19))], [])

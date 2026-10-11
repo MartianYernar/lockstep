@@ -846,6 +846,81 @@ class LockstepBot:
             return
         await self._accept_replan(update, body)
 
+    # Written from how he actually types it -- "i am filling out info still
+    # bro", "need 15 more mins", "ещё 10 мин" -- rather than from a list of
+    # verbs, which is what missed "stretched" on 11 Oct.
+    MORE_WORDS = re.compile(
+        r"\bstill\b|\bnot (?:done|finished|ready)\b|\bhaven'?t finished\b|"
+        r"\b(?:need|gimme|give me|want)\s+(?:\d+\s*\w*\s*)?(?:more|another)\b|"
+        r"\bmore (?:time|mins?|minutes)\b|\b(?:a bit|a little|abit)\s+longer\b|"
+        r"\blonger on\b|\blemme finish\b|\blet me finish\b|\balmost done\b|"
+        r"\bnearly done\b|\bfinishing (?:it|this|up)\b|"
+        r"(?:ещ[её]|еще)\s*\d*\s*мин|не закончил|не доделал|дай ещ[её]", re.I)
+    MORE_MINUTES = re.compile(
+        r"(\d{1,3})\s*(?:more\s+|another\s+)?(?:m\b|min|mins|minute|minutes|мин)", re.I)
+
+    def _more_request(self, text: str) -> int | None:
+        """Minutes, if this says "I'm not finished with what I'm on"."""
+        t = (text or "").strip()
+        if not t or "?" in t or len(t) > 120 or not self.MORE_WORDS.search(t):
+            return None
+        if self.MEAL_WORDS.search(t):          # "still eating" is a meal, handled there
+            return None
+        m = self.MORE_MINUTES.search(t)
+        return int(m.group(1)) if m else 20
+
+    async def _quick_more(self, update: Update, minutes: int) -> bool:
+        """Stretch the block he is in, paying for it out of what comes next.
+
+        The same arithmetic and the same limits as /more -- including the rule
+        that you can only stretch a block you have proved you are doing -- but
+        reached by saying it in his own words. Returns False when there is
+        nothing to stretch, so the message falls through to Friday.
+        """
+        now = self.cfg.now()
+        today = now.date()
+        if not self.engine.in_window(now) or not self.engine.has_plan(today):
+            return False
+        block = self.engine.current_block(today, now)
+        if block is None:
+            return False
+        cap = int(self.cfg.raw.get("extend", {}).get("max_minutes_per_day", 90))
+        used = (self.db.day(today)["extend_minutes"] or 0)
+        minutes = max(5, min(int(minutes), 120))
+        if used + minutes > cap:
+            await update.message.reply_text(
+                f"that'd be {used + minutes} min of stretching today and the cap is "
+                f"{cap} ({used} used). /replan if the day's shape is wrong.")
+            return True
+        if not self.engine.block_was_proven(today, block["id"]):
+            # Not a refusal he can't act on: the photo he owes IS the one for
+            # this block, so say that instead of a rule.
+            await update.message.reply_text(
+                f"send the pic for <b>{html.escape(block['label'])}</b> first and I'll "
+                f"stretch it {minutes} min — can't extend something I haven't seen "
+                "you doing.", parse_mode=ParseMode.HTML)
+            return True
+        res = self.engine.extend_block(today, now, block["id"], minutes)
+        if res.get("error"):
+            await update.message.reply_text(res["error"])
+            return True
+        self.db.run("UPDATE days SET extend_minutes = COALESCE(extend_minutes,0) + ?"
+                    " WHERE date = ?", (res["minutes"], today.isoformat()))
+        self._relink_checks(today)
+        self.ledger.append("block_extended", {"date": today.isoformat(),
+                                              "label": res["label"],
+                                              "minutes": res["minutes"]})
+        cost = ", ".join([f"{lbl} -{m}m" for lbl, m in res["shortened"]]
+                         + [f"{lbl} gone" for lbl in res["dropped"]]) or "the rest of the day"
+        self._app_note(now, f"his block \"{res['label']}\" was stretched {res['minutes']} "
+                            f"min to {res['new_end']//60:02d}:{res['new_end']%60:02d}; "
+                            f"paid for by {cost}")
+        await update.message.reply_text(
+            f"⏱ <b>{html.escape(res['label'])}</b> till "
+            f"{res['new_end']//60:02d}:{res['new_end']%60:02d}. paid for by {html.escape(cost)}. "
+            f"bedtime doesn't move.", parse_mode=ParseMode.HTML)
+        return True
+
     MEAL_WORDS = re.compile(r"\b(eat|eating|food|lunch|dinner|breakfast|snack|"
                             r"поесть|поем|кушать|покушаю|обед|ужин)\b", re.I)
     NOW_WORDS = re.compile(r"\b(now|rn|right now|lemme|let me|imma|i'?m gonna|gonna|"
@@ -924,16 +999,35 @@ class LockstepBot:
             await update.message.reply_text(
                 "nothing's running right now, so just go eat 🍽")
 
-    CLAIM_VERB = re.compile(r"\b(switched|swapped|added|moved|shifted|pushed|grabbed|"
-                            r"slotted|carved|trimmed|squeezed|made room|put (?:it|in)|"
-                            r"changed)\b", re.I)
-    TIME_WORD = re.compile(r"\b(min|mins|minutes|hour|hours|block|plan|schedule)\b|"
-                           r"\d{1,2}:\d{2}", re.I)
+    # 11 Oct: "stretched the rec letter block till 1" went uncorrected because
+    # "stretched" was not on this list. A list of verbs will always be missing
+    # one, so this one is deliberately greedy -- the cost of a false positive
+    # is one extra line telling him the truth about his own plan.
+    CLAIM_VERB = re.compile(
+        r"\b(switch(?:ed)?|swap(?:ped)?|add(?:ed)?|mov(?:ed|ing)|shift(?:ed)?|"
+        r"push(?:ed)?|grab(?:bed)?|slot(?:ted)?|carv(?:ed)?|trim(?:med)?|"
+        r"squeez(?:ed)?|stretch(?:ed)?|extend(?:ed)?|lengthen(?:ed)?|bump(?:ed)?|"
+        r"nudg(?:ed)?|freed|f(?:ou|i)nd you|bought you|gave you|giv(?:en|ing) you|"
+        r"resched(?:uled)?|replann?ed|rewrote|rearrang(?:ed)?|"
+        r"knock(?:ed)? (?:it )?back|made (?:it |you )?room|made room|"
+        r"put (?:it|you|that) (?:in|back|down)|chang(?:ed)?|updat(?:ed)?|"
+        r"set (?:it|that) to|cut|dropp?ed|remov(?:ed)?|split|merg(?:ed)?)\b", re.I)
+    TIME_WORD = re.compile(
+        r"\b(min|mins|minute|minutes|hour|hours|hr|hrs|block|plan|schedule|"
+        r"till|until|to)\b|\d{1,2}:\d{2}|\b\d{1,2}\s*(?:am|pm)\b", re.I)
+
+    # These say it on their own -- there is no innocent reading of "rescheduled
+    # the rest" or "made room for it" that leaves the plan untouched.
+    STRONG_CLAIM = re.compile(
+        r"\b(resched(?:uled)?|replann?ed|rewrote|rearrang(?:ed)?|made (?:you )?room|"
+        r"freed up|sorted the (?:rest|day)|fixed the (?:plan|day))\b", re.I)
 
     def _claims_change(self, reply: str) -> bool:
         """Does this sentence say the day was rearranged?"""
         if "📌" in reply:                 # it saved a task or an event; not a schedule
             return False
+        if self.STRONG_CLAIM.search(reply):
+            return True
         for sentence in re.split(r"[.!\n]", reply):
             if self.CLAIM_VERB.search(sentence) and self.TIME_WORD.search(sentence):
                 return True
@@ -1831,6 +1925,60 @@ class LockstepBot:
         except Forbidden:
             await self._on_blocked()
 
+    async def _exam_day_tick(self, now: datetime) -> None:
+        """Build and lock a plan for a day whose hours are already decided.
+
+        A quiet window means an exam: the morning is spoken for, he will not be
+        at a keyboard, and a missing plan would siren at him while he is sitting
+        it. So the day plans itself an hour before the window opens -- the exam
+        hours as their own block, the rest filled from his deadlines -- and
+        locks without a button. He can /replan it like any other day.
+
+        Only ever for a day with a quiet window, and only if he has not written
+        one himself.
+        """
+        day = now.date()
+        quiet = self.engine.quiet_spans(day)
+        if not quiet or self.engine.has_plan(day):
+            return
+        start = self.cfg.enforce_start_for(day)
+        minute = now.hour * 60 + now.minute
+        if not (start - 60 <= minute < start + 120):
+            return
+        if not self.db.claim(f"exam_plan:{day}"):
+            return
+        label = next((r["label"] for r in self.coach.routines.for_day(day) if r["quiet"]),
+                     "exam")
+        if not self.db.goals(day):
+            self.db.ensure_day(day)
+            self.db.set_goals(day, [label, "rest after it", "one hour of real work"])
+        said = "\n".join(
+            f"{s//60:02d}:{s%60:02d}-{e//60:02d}:{e%60:02d} {label}" for s, e in quiet)
+        try:
+            blocks, note = await self.dayplanner.build(day, said, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("could not build the exam day: %s", exc)
+            # Even with no model: the exam, then an honest unplanned rest of it.
+            end = self.cfg.enforce_end_for(day)
+            qs, qe = min(s for s, _ in quiet), max(e for _, e in quiet)
+            rows = [(max(start, qs), qe, label)]
+            if qe < end:
+                rows.append((qe, end, "rest and whatever you have left"))
+            if qs > start:
+                rows.insert(0, (start, qs, "get to the exam"))
+            blocks = planner.parse("\n".join(
+                f"{s//60:02d}:{s%60:02d}-{e//60:02d}:{e%60:02d} {lbl}" for s, e, lbl in rows))
+            note = ""
+        text = "\n".join(f"{b.hhmm()} {b.label}" for b in blocks)
+        await self._accept_plan(_Reply(None, self.cfg.user_chat_id,
+                                       send=self.send_user), day, text)
+        self.ledger.append("exam_day_planned", {"date": day.isoformat(), "label": label})
+        await self.send_user(
+            f"🗓 {day:%a %d %b} is your <b>{html.escape(label)}</b> day, so I've written it "
+            f"for you — silent {quiet[0][0]//60:02d}:{quiet[0][0]%60:02d}-"
+            f"{quiet[0][1]//60:02d}:{quiet[0][1]%60:02d}, nothing asked of you in there. "
+            "/today to see it, /replan if you want it different. good luck 🤞")
+
     async def _foundations_tick(self, now: datetime) -> None:
         f = self.foundations
         if not f.enabled:
@@ -1928,6 +2076,11 @@ class LockstepBot:
             await self._standup_tick(now)
         except Exception as exc:                              # noqa: BLE001
             log.warning("standup tick failed: %s", exc)
+
+        try:
+            await self._exam_day_tick(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("exam-day plan failed: %s", exc)
 
         # before the window: what's on his plate
         at = self.cfg.enforce_start_for(day) - int(conf.get("brief_minutes_before", 20))
@@ -2877,6 +3030,14 @@ class LockstepBot:
             await self._handle_disable_reason(update, text)
             return
 
+        # "i am filling out info still bro" / "need 20 more mins on this" is
+        # the other shape, and the one Friday got wrong on 11 Oct: it said it
+        # had stretched the block and nothing moved.
+        if self._is_user(update):
+            more = self._more_request(text)
+            if more is not None and await self._quick_more(update, more):
+                return
+
         # "lemme eat for 10 min" is a schedule change with one obvious shape.
         # It is done here, exactly, instead of being handed to a model that
         # on 10 Oct answered "grabbed 10 mins for food" and changed nothing.
@@ -3719,16 +3880,27 @@ class LockstepBot:
 
 
 class _Reply:
+    """Lets code that expects an Update talk back through any channel."""
     """Lets a button press reuse the code paths written for a message."""
 
-    def __init__(self, q, chat_id):
+    def __init__(self, q, chat_id, send=None):
         self._q = q
+        self._send = send              # for messages the bot starts itself
         self.effective_chat = type("C", (), {"id": chat_id})()
         self.message = self
 
     async def reply_text(self, text, **kw):
+        if self._q is None:
+            # send_user already sends as HTML; passing it again is a TypeError.
+            kw.pop("parse_mode", None)
+            await self._send(text, **kw)
+            return
         await self._q.message.reply_text(text, **kw)
 
     @property
     def chat(self):
+        if self._q is None:
+            async def _noop(*_a, **_k):
+                return None
+            return type("C", (), {"send_action": staticmethod(_noop)})()
         return self._q.message.chat

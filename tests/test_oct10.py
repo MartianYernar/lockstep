@@ -113,7 +113,9 @@ cfg, db, led, eng, bot = make(now=N(17, 10))
 seen = model(bot, {"reply": "got it, added 20 mins for CAS", "actions": [
     {"type": "edit_plan", "day": "today",
      "plan": "17:10-17:50 chill\n17:50-22:00 work: uni essay"}]})
-u = FakeUpdate("I need another 20min for replacing")
+# Not "I need another 20 min" any more: that phrasing is now handled by the
+# app itself (test_more_time.py), so it never reaches Friday at all.
+u = FakeUpdate("put chill instead of the rest of this block")
 run(bot.on_text(u, None))
 check("the change cut real work, so it was held for a reason",
       bot.pending.get(1, {}).get("action"), "rewrite_why")
