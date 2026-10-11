@@ -201,8 +201,16 @@ blocker_sites - every site or app named in that visible list, verbatim, as an
 Now three privacy fields. The person has asked to be warned about these, so
 judge them strictly -- a false negative here costs them more than a retake:
 
-face_visible - true if any human face is identifiable in the frame, theirs or
-  anyone else's. A body with the face out of frame or turned away is false.
+face_visible - true only if a REAL PERSON is in the room in front of the
+  camera and their face is identifiable: his own face, or anyone physically
+  there with him. A body with the face out of frame or turned away is false.
+  Faces that are only CONTENT ON A SCREEN are false: photos on a website,
+  a university's staff page, video thumbnails, avatars, a textbook or a PDF
+  he is reading. Those people published their own pictures and are nothing to
+  do with his privacy. 11 Oct 2026 this refused screenshots of university
+  pages he was working through.
+  A screen showing HIM -- a selfie preview, a video call of his own face --
+  is still true.
 identity_visible - true if HIS OWN identity is readable: his name, his
   username or login, his personal email address, the account he is signed in
   as (browser profile, mail inbox, chat sidebar), his profile photo, his phone

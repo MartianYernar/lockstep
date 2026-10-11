@@ -194,7 +194,11 @@ def build_app(cfg, engine, ledger) -> web.Application:
         # Bounded to the enforcement window on purpose: bedtime and the missing
         # plan are both outside it, so an afternoon walk can never buy silence
         # at 22:30.
-        if engine.outside_active(now) and engine.in_window(now):
+        # "-1" also covers a quiet window, and the half hour before it: the
+        # phone caches the last answer and re-reads it when it loses the
+        # network, so the answer that keeps it silent in an exam hall has to
+        # be handed over while he is still on wifi at home.
+        if engine.quiet_soon(now) or (engine.outside_active(now) and engine.in_window(now)):
             return web.Response(text="-1", content_type="text/plain")
         st = engine.agent_state(now).as_dict()
         if not st["phone_alarm"]:

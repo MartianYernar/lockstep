@@ -20,7 +20,7 @@ from datetime import date, datetime
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS routines (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    days       TEXT NOT NULL,              -- "5,6" -- Mon=0 .. Sun=6
+    days       TEXT NOT NULL,              -- "5,6" -- Mon=0 .. Sun=6, "" if dated
     start_min  INTEGER NOT NULL,
     end_min    INTEGER NOT NULL,
     label      TEXT NOT NULL,
@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS routines (
     created_at TEXT NOT NULL
 );
 """
+
+# Added later: a routine can land on ONE date instead of a weekday, and it can
+# be quiet -- nothing asked, nothing sounded, for an exam.
+MIGRATIONS = {"on_date": "TEXT", "quiet": "INTEGER NOT NULL DEFAULT 0"}
 
 DAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
              "пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6}
@@ -65,23 +69,31 @@ class Routines:
     def __init__(self, db):
         self.db = db
         db.conn.executescript(SCHEMA)
+        have = {r["name"] for r in db.conn.execute("PRAGMA table_info(routines)")}
+        for col, decl in MIGRATIONS.items():
+            if col not in have:
+                db.conn.execute(f"ALTER TABLE routines ADD COLUMN {col} {decl}")
         db.conn.commit()
 
     def add(self, days: list[int], start: int, end: int, label: str, now: datetime,
-            photo: bool = False) -> int | None:
+            photo: bool = False, on_date: date | None = None,
+            quiet: bool = False) -> int | None:
         label = (label or "").strip()
-        if not days or not label or not 0 <= start < end <= 24 * 60:
+        if (not days and on_date is None) or not label or not 0 <= start < end <= 24 * 60:
             return None
-        key = ",".join(str(d) for d in sorted(set(days)))
+        key = ",".join(str(d) for d in sorted(set(days or [])))
+        iso = on_date.isoformat() if on_date else None
         have = self.db.one(
             "SELECT id FROM routines WHERE active=1 AND days=? AND start_min=? AND end_min=?"
-            " AND lower(label)=lower(?)", (key, start, end, label))
+            " AND IFNULL(on_date,'')=IFNULL(?,'') AND lower(label)=lower(?)",
+            (key, start, end, iso, label))
         if have:
             return have["id"]
         return self.db.run(
-            "INSERT INTO routines (days, start_min, end_min, label, photo, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (key, start, end, label, 1 if photo else 0, now.isoformat())).lastrowid
+            "INSERT INTO routines (days, start_min, end_min, label, photo, created_at,"
+            " on_date, quiet) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (key, start, end, label, 1 if photo else 0, now.isoformat(),
+             iso, 1 if quiet else 0)).lastrowid
 
     def remove(self, rid: int) -> bool:
         return self.db.run("UPDATE routines SET active=0 WHERE id=? AND active=1",
@@ -93,15 +105,23 @@ class Routines:
         for it in items or []:
             span = parse_span(str(it.get("time", "")))
             days = parse_days(str(it.get("days", "")))
-            if not span or not days:
+            on = it.get("date")
+            if on and not isinstance(on, date):
+                try:
+                    on = date.fromisoformat(str(on)[:10])
+                except ValueError:
+                    on = None
+            if not span or (not days and not on):
                 continue
-            key = ",".join(str(d) for d in days)
+            key = ",".join(str(d) for d in (days or []))
             if self.db.one("SELECT 1 FROM routines WHERE days=? AND start_min=? AND end_min=?"
-                           " AND lower(label)=lower(?)",
-                           (key, span[0], span[1], str(it.get("label", "")).strip())):
+                           " AND IFNULL(on_date,'')=IFNULL(?,'') AND lower(label)=lower(?)",
+                           (key, span[0], span[1], on.isoformat() if on else None,
+                            str(it.get("label", "")).strip())):
                 continue
             if self.add(days, span[0], span[1], str(it.get("label", "")), now,
-                        photo=bool(it.get("photo", False))):
+                        photo=bool(it.get("photo", False)), on_date=on,
+                        quiet=bool(it.get("quiet", False))):
                 n += 1
         return n
 
@@ -110,7 +130,23 @@ class Routines:
 
     def for_day(self, day: date) -> list:
         wd = str(day.weekday())
-        return [r for r in self.all() if wd in r["days"].split(",")]
+        iso = day.isoformat()
+        return [r for r in self.all()
+                if (r["on_date"] == iso if r["on_date"]
+                    else wd in (r["days"] or "").split(","))]
+
+    def quiet_now(self, now: datetime):
+        """The quiet window covering this minute, if any. Nothing is asked or
+        sounded inside one: on 18 Oct he sits an IELTS exam from 10:00 to
+        15:00, and a siren in an exam hall is not accountability."""
+        minute = now.hour * 60 + now.minute
+        for r in self.for_day(now.date()):
+            if r["quiet"] and r["start_min"] <= minute < r["end_min"]:
+                return r
+        return None
+
+    def quiet_spans(self, day: date) -> list[tuple[int, int]]:
+        return [(r["start_min"], r["end_min"]) for r in self.for_day(day) if r["quiet"]]
 
     def photo_free(self, day: date, start: int, end: int, label: str) -> bool:
         return any(r["label"] == label and not r["photo"]
@@ -121,12 +157,17 @@ class Routines:
         names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         out = []
         for r in self.all():
-            ds = [int(x) for x in r["days"].split(",")]
-            when = ("weekends" if ds == [5, 6] else "weekdays" if ds == [0, 1, 2, 3, 4]
-                    else "every day" if len(ds) == 7 else ",".join(names[d] for d in ds))
+            if r["on_date"]:
+                when = f"on {date.fromisoformat(r['on_date']):%a %d %b}"
+            else:
+                ds = [int(x) for x in (r["days"] or "").split(",") if x != ""]
+                when = ("weekends" if ds == [5, 6] else "weekdays" if ds == [0, 1, 2, 3, 4]
+                        else "every day" if len(ds) == 7
+                        else ",".join(names[d] for d in ds))
             out.append(f"  r{r['id']}: {when} {r['start_min']//60:02d}:{r['start_min']%60:02d}-"
                        f"{r['end_min']//60:02d}:{r['end_min']%60:02d} {r['label']}"
-                       + ("" if r["photo"] else " (no photo)"))
+                       + (" (SILENT: nothing asked, no siren)" if r["quiet"]
+                          else "" if r["photo"] else " (no photo)"))
         return "\n".join(out)
 
     def overlay(self, day: date, blocks: list, start: int, end: int, planner) -> list:

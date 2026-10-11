@@ -730,21 +730,27 @@ class Coach:
                     done.append(f"event saved: {what} — {when:%a %d %b %H:%M}")
                 elif kind == "add_routine":
                     from .routines import parse_days, parse_span
-                    days = parse_days(a.get("day") or a.get("date") or "")
+                    on = _date(a.get("date"))
+                    days = [] if on else parse_days(a.get("day") or a.get("date") or "")
                     span = parse_span(a.get("time") or a.get("text") or "")
                     what = (a.get("title") or a.get("text") or "").strip()
-                    if not days or not span or not what:
+                    if (not days and on is None) or not span or not what:
                         done.append("⚠️ didn't catch the days and times for that "
                                     "routine — like \"weekends 10:00-11:00 teaching\"")
                         continue
-                    self.routines.add(days, span[0], span[1], what, now)
+                    quiet = bool(a.get("quiet"))
+                    self.routines.add(days, span[0], span[1], what, now,
+                                      on_date=on, quiet=quiet)
                     names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-                    when = ("weekends" if days == [5, 6] else
+                    when = (f"{on:%a %d %b}" if on else
+                            "weekends" if days == [5, 6] else
                             "weekdays" if days == [0, 1, 2, 3, 4] else
                             ",".join(names[d] for d in days))
-                    done.append(f"routine saved: {when} {span[0]//60:02d}:{span[0]%60:02d}-"
-                                f"{span[1]//60:02d}:{span[1]%60:02d} {what} — goes in "
-                                "every plan, no photo")
+                    done.append(f"{'silent window' if quiet else 'routine'} saved: {when} "
+                                f"{span[0]//60:02d}:{span[0]%60:02d}-"
+                                f"{span[1]//60:02d}:{span[1]%60:02d} {what} — "
+                                + ("nothing asked, no siren" if quiet
+                                   else "goes in every plan, no photo"))
                 elif kind == "remove_routine":
                     ref = (a.get("task") or a.get("text") or "").strip().lower().lstrip("r#")
                     if ref.isdigit() and self.routines.remove(int(ref)):
@@ -858,6 +864,11 @@ actually told you, never guessed:
   ("I teach 10-11 on weekends, then I'm on the road till 12"). One action per
   time slot. The app then puts it into every plan by itself.
 - {"type":"remove_routine","task":"r3"}  he says one of those stopped.
+- {"type":"add_routine","date":"YYYY-MM-DD","time":"HH:MM-HH:MM","title":"what
+  it is","quiet":true}  a ONE-OFF on a given date -- an exam, a competition, a
+  flight. With "quiet": true nothing is asked and no siren sounds for those
+  hours at all. Use quiet for anything where a phone going off would be a
+  disaster: exams, interviews, performances.
 - When he tells you where he is RIGHT NOW and until when ("I'm out teaching
   till 11"), and then asks for a plan, put that in make_plan's "text" with
   times ("teaching until 11:00, commute 11:00-12:00") -- never plan work over

@@ -93,13 +93,39 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def _routines(self):
+        try:
+            from .routines import Routines
+            return Routines(self.db)
+        except Exception:                                     # noqa: BLE001
+            return None
+
+    def quiet_now(self, now: datetime):
+        """The quiet window covering this minute, if any."""
+        r = self._routines()
+        return r.quiet_now(now) if r is not None else None
+
+    def quiet_soon(self, now: datetime, lead_min: int = 45) -> bool:
+        """Inside a quiet window, or close enough that he is already leaving."""
+        if self.quiet_now(now) is not None:
+            return True
+        minute = now.hour * 60 + now.minute
+        return any(qs - lead_min <= minute < qe for qs, qe in self.quiet_spans(now.date()))
+
+    def quiet_spans(self, day: date) -> list[tuple[int, int]]:
+        r = self._routines()
+        return r.quiet_spans(day) if r is not None else []
+
     def _routine_photo_free(self, day: date, b) -> bool:
         try:
             rows = self.db.q("SELECT * FROM routines WHERE active=1 AND photo=0")
         except Exception:                                     # noqa: BLE001
             return False
         wd = str(day.weekday())
-        return any(wd in r["days"].split(",") and r["label"] == b["label"]
+        iso = day.isoformat()
+        return any((r["on_date"] == iso if r["on_date"]
+                    else wd in (r["days"] or "").split(","))
+                   and r["label"] == b["label"]
                    and r["start_min"] < b["end_min"] and b["start_min"] < r["end_min"]
                    for r in rows)
 
@@ -391,6 +417,7 @@ class Engine:
         gap = int(self.cfg.raw.get("proof", {}).get("shot_gap_min", 1))
         out: list[tuple[int, int | None, str]] = []
         meal_free = int((self.cfg.raw.get("friend", {}) or {}).get("meal_grace_min", 45))
+        quiet = self.quiet_spans(day)
         for b in self.db.blocks(day):
             # A photo of dinner proves nothing, and asking for one sounded the
             # siren in the middle of the meal (10 Oct 20:07: "if I send u image
@@ -447,7 +474,8 @@ class Engine:
                 kinds = ["activity"]
             for i, kind in enumerate(kinds):
                 minute = lo + i * gap
-                if minute < end and minute < b["end_min"]:
+                if minute < end and minute < b["end_min"] \
+                        and not any(qs <= minute < qe for qs, qe in quiet):
                     out.append((minute, b["id"], kind))
 
             # On top of the proof at the top of the block, a photo every N
@@ -464,7 +492,8 @@ class Engine:
             if every > 0:
                 minute = lo + every
                 while minute < min(b["end_min"], end):
-                    out.append((minute, b["id"], "activity"))
+                    if not any(qs <= minute < qe for qs, qe in quiet):
+                        out.append((minute, b["id"], "activity"))
                     minute += every
         return out
 
@@ -564,7 +593,7 @@ class Engine:
 
     # -- debt ------------------------------------------------------------------
     def debt_seconds(self, day: date, now: datetime) -> int:
-        if not self.in_window(now):
+        if not self.in_window(now) or self.quiet_now(now) is not None:
             return 0
 
         # Missing plan is itself a violation: debt runs from the window opening.
@@ -645,6 +674,10 @@ class Engine:
                     detail=f"{late} min past bedtime. This stops when the photo lands.")
 
         if not self.in_window(now):
+            return idle
+        # An exam hall is not a place to be sirened at. Nothing is owed and
+        # nothing sounds while a quiet window is running.
+        if self.quiet_now(now) is not None:
             return idle
 
         debt = self.debt_seconds(day, now)
