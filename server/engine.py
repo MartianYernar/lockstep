@@ -93,6 +93,18 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def _deliverables(self):
+        try:
+            from .deliverables import Deliverables
+            d = Deliverables(self.db, self.cfg)
+            return d if d.enabled else None
+        except Exception:                                     # noqa: BLE001
+            return None
+
+    def _wants_deliverable(self, block) -> bool:
+        d = self._deliverables()
+        return d is not None and d.wants(block)
+
     def _steps(self):
         try:
             from .microsteps import Steps
@@ -504,8 +516,24 @@ class Engine:
                          else ["activity"])
             else:
                 kinds = ["activity"]
+            # He names the finish line before the work, and shows it after.
+            # Both are enforced like a photo: a block whose target was never
+            # written is a block nobody can judge afterwards, which is how
+            # ninety minutes of sitting in front of the right document used to
+            # count as a perfect block.
+            if self._wants_deliverable(b):
+                if not any(qs <= lo < qe for qs, qe in quiet):
+                    out.append((lo, b["id"], "declare"))
+                last = min(b["end_min"], end) - 1
+                if last > lo and not any(qs <= last < qe for qs, qe in quiet):
+                    out.append((last, b["id"], "deliver"))
+
+            # The target question owns the block's first minute, so the photo
+            # that follows it starts one gap later -- two checkpoints cannot
+            # share a minute, and the one that lost was the photo.
+            base = lo + (gap if self._wants_deliverable(b) else 0)
             for i, kind in enumerate(kinds):
-                minute = lo + i * gap
+                minute = base + i * gap
                 if minute < end and minute < b["end_min"] \
                         and not any(qs <= minute < qe for qs, qe in quiet):
                     out.append((minute, b["id"], kind))
@@ -523,7 +551,11 @@ class Engine:
             every = int(self.cfg.raw.get("proof", {}).get("within_block_min", 0))
             if every > 0:
                 minute = lo + every
+                last = min(b["end_min"], end) - 1
                 while minute < min(b["end_min"], end):
+                    # The end-of-block proof already covers the last minutes.
+                    if self._wants_deliverable(b) and minute >= last - every // 2:
+                        break
                     if not any(qs <= minute < qe for qs, qe in quiet):
                         out.append((minute, b["id"], "activity"))
                     minute += every

@@ -283,6 +283,52 @@ REQUIREMENTS = {
 }
 
 
+DELIVER_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "delivered": {"type": "BOOLEAN"},
+        "moved": {"type": "BOOLEAN"},
+        "what_changed": {"type": "STRING"},
+        "confidence": {"type": "NUMBER"},
+        "reason": {"type": "STRING"},
+    },
+    "required": ["delivered", "moved", "what_changed", "confidence", "reason"],
+}
+
+DELIVER_PROMPT = """You are checking whether a block of work produced what the
+person said it would. You are shown {images}.
+
+AT THE START, HE WROTE THAT BY THE END THIS WOULD EXIST:
+"{declared}"
+
+The block was "{label}", {minutes} minutes long, ending now ({now}).
+
+Answer as JSON.
+
+delivered - true if the FINAL photo shows the thing he said would exist. Judge
+  the substance, not the wording: "activities section with 5 entries" is
+  delivered by a form showing five filled activity rows, whatever it is called
+  on screen. If he promised a number and you can count fewer, that is false.
+  If the photo does not show the thing at all -- a different document, a
+  different app, a desk with no screen -- that is false.
+moved - true if the final photo shows MORE of the work than the first photo
+  did: more text, more rows filled, more questions worked, a later page, a new
+  file present. The two photos may be framed differently; judge the work, not
+  the framing. If you were shown only one photo, repeat your answer for
+  delivered here.
+what_changed - one short phrase naming what is different between the two, in
+  plain words ("four more activity rows", "questions 12-18 now worked",
+  "nothing visibly different"). This is read by a person.
+confidence - 0.0 to 1.0 in your answer for delivered.
+reason - one short sentence addressed to him. If delivered is false, say
+  exactly what is missing against his own words. Never lecture.
+
+Be fair and be strict in the right places. He wrote the target himself, when
+he was fresh, and the only question now is whether it exists. Do not accept
+"the file is open" as "the work is done", and do not reject real work because
+it is laid out differently from how you imagined it."""
+
+
 @dataclass
 class Verdict:
     ok: bool
@@ -367,7 +413,9 @@ class Validator:
             chain.insert(0, g["model"])
         return chain or ["gemini-3.1-flash-lite"]
 
-    async def _ask(self, image_bytes: bytes, mime: str, prompt: str) -> dict:
+    async def _ask(self, image_bytes: bytes, mime: str, prompt: str,
+                   before: bytes | None = None, before_mime: str = "image/jpeg",
+                   schema=None) -> dict:
         from google.genai import types
         client = self._get_client()
 
@@ -389,11 +437,17 @@ class Validator:
             return types.GenerateContentConfig(
                 temperature=0.0,
                 response_mime_type="application/json",
-                response_schema=RESPONSE_SCHEMA,
+                response_schema=schema or RESPONSE_SCHEMA,
                 **(extra if with_thinking else {}),
             )
 
-        contents = [types.Part.from_bytes(data=image_bytes, mime_type=mime), prompt]
+        contents = []
+        if before is not None:
+            # Order matters: the model is told which is which, and "FIRST" has
+            # to be the one it sees first.
+            contents.append(types.Part.from_bytes(data=before, mime_type=before_mime))
+        contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
+        contents.append(prompt)
         last: Exception | None = None
         for model in self._model_chain():
             # Some models refuse thinking_budget=0 outright (400, measured on
@@ -421,6 +475,34 @@ class Validator:
                         break
                     raise
         raise last if last else RuntimeError("no models configured")
+
+    async def delivered(self, image_bytes: bytes, declared: str, label: str,
+                        minutes: int, now, mime: str = "image/jpeg",
+                        before: bytes | None = None) -> dict:
+        """Did the block produce what he said it would?
+
+        Two photos when the start-of-block one survives (they do, for as long
+        as the block runs), one when it does not. Never raises: a checker that
+        cannot answer must not be able to fail a block he may well have done --
+        that returns unverified, which counts and is flagged.
+        """
+        prompt = DELIVER_PROMPT.format(
+            images=("two photos: the FIRST taken when the block started, the "
+                    "SECOND just now" if before is not None else
+                    "one photo, taken just now at the end of the block"),
+            declared=declared.strip(), label=label, minutes=int(minutes),
+            now=now.strftime("%H:%M"))
+        try:
+            data = await self._ask(image_bytes, mime, prompt, before=before,
+                                   schema=DELIVER_SCHEMA)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("deliverable check failed: %s", exc)
+            return {"delivered": True, "moved": True, "unverified": True,
+                    "what_changed": "", "confidence": 0.0,
+                    "reason": f"Couldn't reach the checker ({str(exc)[:60]}). "
+                              "Counted, and flagged in the log."}
+        data["unverified"] = False
+        return data
 
     async def check(self, image_bytes: bytes, label: str, category: str,
                     now: datetime, mime: str = "image/jpeg",

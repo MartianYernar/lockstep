@@ -17,6 +17,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 
 from . import images, planner, reminders, vision
 from .dailydoc import DailyDoc
+from .deliverables import Deliverables
 from .microsteps import DONE_WORDS, Steps
 from .config import _hhmm
 from .lock import LockError
@@ -56,6 +57,7 @@ class LockstepBot:
         self.coach.agenda = self.agenda
         self.doc = DailyDoc(cfg)
         self.steps = Steps(db, cfg)
+        self.deliver = Deliverables(db, cfg)
         self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda, self.doc)
         from .dayplan import Proposals
         self.proposals = Proposals(db)
@@ -1958,6 +1960,60 @@ class LockstepBot:
         else:
             await self.send_user(f"⏱ {st.question(n)}")
 
+    async def _handle_declaration(self, update: Update, text: str,
+                                  now: datetime) -> bool:
+        """Take the finish line he just named, if one is owed. True if taken."""
+        if not self.deliver.enabled or len(text) < 3 or text.startswith("/"):
+            return False
+        day, minute = now.date(), now.hour * 60 + now.minute
+        cp = self.db.one(
+            "SELECT * FROM checkpoints WHERE date=? AND kind='declare'"
+            " AND state IN ('asked','overdue') ORDER BY due_at DESC LIMIT 1",
+            (day.isoformat(),))
+        if cp is None:
+            return False
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None:
+            return False
+        if not self.deliver.declare(day, blk, text, now):
+            return False
+        self.db.run("UPDATE checkpoints SET state='satisfied', settled_at=? WHERE id=?",
+                    (now.isoformat(), cp["id"]))
+        self.ledger.append("deliverable_declared",
+                           {"date": day.isoformat(), "label": blk["label"],
+                            "declared": text[:200]})
+        ends = blk["end_min"]
+        await update.message.reply_text(
+            f"🎯 locked: <i>{html.escape(text)}</i>\n"
+            f"by {ends//60:02d}:{ends%60:02d}. go.", parse_mode=ParseMode.HTML)
+        self._app_note(now, f"he declared for \"{blk['label']}\": {text[:200]} "
+                            f"(due {ends//60:02d}:{ends%60:02d})")
+        # One cheap line of push-back on a target that looks thin for the time.
+        try:
+            await self._push_back_on_target(blk, text, now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("target push-back failed: %s", exc)
+        return True
+
+    async def _push_back_on_target(self, blk, text: str, now: datetime) -> None:
+        mins = blk["end_min"] - blk["start_min"]
+        if mins < 60 or not self.coach.enabled:
+            return
+        reserve = int(self.coach.conf.get("say_reserve", 30))
+        if self.coach.budget_left(now.date()) <= reserve:
+            return
+        said = await self.coach.say(
+            "he just set the target for a block of work and you think it may be "
+            "too small for the time -- say so in ONE short line, or say nothing "
+            "at all by answering with a single dash",
+            f"block: {blk['label']}\nminutes: {mins}\n"
+            f"what he says will exist by the end: {text}\n"
+            "if that is a fair target for the time, answer exactly: -\n", now)
+        said = (said or "").strip()
+        if said and said != "-" and len(said) < 200:
+            await self.send_user(said)
+
     async def _handle_step_text(self, update: Update, text: str, now: datetime) -> bool:
         """His side of the loop: a step, or "done". True if it was one.
 
@@ -2903,6 +2959,8 @@ class LockstepBot:
         await update.message.chat.send_action("typing")
         # What he said he was doing this minute, so the photo is checked
         # against the claim and not only the block's name.
+        if cp["kind"] == "deliver" and self.deliver.enabled                 and await self._judge_delivery(update, cp, blob, mime, now):
+            return
         claimed = self.steps.current_text(now) if self.steps.enabled else ""
         for_checker = self.coach.terms.expand(label)
         if claimed:
@@ -2967,8 +3025,27 @@ class LockstepBot:
 
     async def _count_photo(self, update: Update, cp, blob: bytes, verdict, now: datetime) -> None:
         today = now.date()
+        minute = now.hour * 60 + now.minute
         self.last_reject = None
         path = self._save_photo(blob, today, f"cp{cp['id']}")
+        # The first proof of a block is the "before" the end-of-block check is
+        # measured against, so it is kept at a size you can actually read a
+        # form or a page of questions in -- and dropped when the block settles.
+        if self.deliver.enabled and verdict.ok:
+            blk_now = next((b for b in self.db.blocks(today)
+                            if b["start_min"] <= minute < b["end_min"]), None)
+            # The first photo that lands inside the block is the "before";
+            # set_before only writes when it is still empty, so later ones in
+            # the same block leave it alone. (The block's first checkpoint is
+            # the target question, not a photo, so "is it the first?" would
+            # never be true here.)
+            if blk_now is not None and self.deliver.wants(blk_now)                     and cp["kind"] in ("activity", "blocker_toggle"):
+                self.deliver.ensure(today, blk_now)
+                self.deliver.set_before(
+                    today, blk_now,
+                    self._save_photo(blob, today, f"before{blk_now['start_min']}",
+                                     dimension=int(self.cfg.raw.get("privacy", {})
+                                                   .get("compare_dimension", 768))))
         res = self.engine.satisfy(today, now, cp["id"], verdict.to_json(), path)
         try:
             self.tasks.touch(self.tasks.match(cp["label"] or ""), today)
@@ -3078,7 +3155,68 @@ class LockstepBot:
             f"🚶 <b>ok, no siren till {until:%H:%M}.</b> go. {left} left today.\n\n"
             "stuff due while you're out still counts as missed.", parse_mode=ParseMode.HTML)
 
-    def _save_photo(self, blob: bytes, day: date, tag: str) -> str | None:
+    async def _judge_delivery(self, update: Update, cp, blob: bytes, mime: str,
+                              now: datetime) -> bool:
+        """The end-of-block photo, judged against his own declaration.
+
+        Not "were you there" -- "is the thing you promised there". The photo
+        from the start of the block goes in beside it when it still exists, so
+        the question can be the honest one: did this move?
+        """
+        day, minute = now.date(), now.hour * 60 + now.minute
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        row = self.deliver.open_for(day, blk) if blk else None
+        declared = (row or {}).get("declared") or ""
+        if not declared:
+            # Nothing was promised, so there is nothing to compare: let the
+            # ordinary check have it rather than refusing a real photo.
+            return False
+        before = None
+        path = (row or {}).get("before_path")
+        if path and os.path.exists(path):
+            try:
+                with open(path, "rb") as fh:
+                    before = fh.read()
+            except OSError:
+                before = None
+        mins = blk["end_min"] - blk["start_min"]
+        data = await self.validator.delivered(blob, declared, blk["label"], mins, now,
+                                              mime=mime, before=before)
+        ok = bool(data.get("delivered")) and (before is None or data.get("moved", True))
+        self.deliver.settle(row["id"], "delivered" if ok else "short", data, now)
+        self.ledger.append("deliverable_settled", {
+            "date": day.isoformat(), "label": blk["label"],
+            "state": "delivered" if ok else "short",
+            "declared": declared[:200],
+            "what_changed": (data.get("what_changed") or "")[:200],
+            "unverified": bool(data.get("unverified"))})
+        if ok:
+            self.db.run("UPDATE checkpoints SET state='satisfied', settled_at=? WHERE id=?",
+                        (now.isoformat(), cp["id"]))
+            done, named = self.deliver.score(day)
+            await update.message.reply_text(
+                f"✅ <b>delivered.</b> {html.escape(data.get('what_changed') or '')}\n"
+                f"{done}/{named} targets hit today.", parse_mode=ParseMode.HTML)
+            self._app_note(now, f"he DELIVERED \"{declared[:120]}\" for "
+                                f"{blk['label']}: {data.get('what_changed', '')[:120]}")
+            return True
+        else:
+            self.db.run("UPDATE checkpoints SET attempts = attempts + 1 WHERE id=?",
+                        (cp["id"],))
+            await update.message.reply_text(
+                f"❌ <b>not what you said.</b>\n\nyou wrote: "
+                f"<i>{html.escape(declared)}</i>\n"
+                f"{html.escape(data.get('reason') or '')}\n\n"
+                "send another one if it does exist and I framed it wrong. "
+                "otherwise that's the block, and it goes in the report as it is.",
+                parse_mode=ParseMode.HTML)
+            self._app_note(now, f"he did NOT deliver \"{declared[:120]}\" for "
+                                f"{blk['label']}: {data.get('reason', '')[:120]}")
+        return True
+
+    def _save_photo(self, blob: bytes, day: date, tag: str,
+                    dimension: int | None = None) -> str | None:
         """Keep what the policy allows and no more.
 
         The default is a thumbnail: enough to remember what you sent, too small
@@ -3088,8 +3226,8 @@ class LockstepBot:
         mode = priv.get("store_photos", "thumbnail")
         if mode == "none":
             return None
-        data = (blob if mode == "full"
-                else images.thumbnail(blob, int(priv.get("thumbnail_dimension", 320))))
+        size = dimension or int(priv.get("thumbnail_dimension", 320))
+        data = blob if mode == "full" and dimension is None else images.thumbnail(blob, size)
         folder = os.path.join(PHOTO_DIR, day.isoformat())
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, f"{tag}_{datetime.now():%H%M%S}.jpg")
@@ -3126,6 +3264,12 @@ class LockstepBot:
                 return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
+            return
+
+        # A declaration is owed before anything else is read: the block is
+        # not running until he has written what it is for.
+        if self._is_user(update) and await self._handle_declaration(
+                update, text, self.cfg.now()):
             return
 
         # The ten-minute loop gets first refusal on a short message: it is
@@ -3705,6 +3849,32 @@ class LockstepBot:
                 # Same checkpoint, same words -- but not the same words every time.
                 return options[cid % len(options)]
 
+            if kind == "declare":
+                mins = next((bk["end_min"] - bk["start_min"]
+                             for bk in self.db.blocks(due.date())
+                             if bk["start_min"] == minute), 0)
+                ends = minute + mins
+                body = (f"🎯 <b>{label}</b> — {mins} min.\n\n"
+                        f"what will EXIST at {ends//60:02d}:{ends%60:02d} that "
+                        "doesn't exist now? one line, something a photo could "
+                        "show.\n\n<i>e.g. \"activities section with 5 entries "
+                        "filled\", \"questions 12-20 worked in my notebook\", "
+                        "\"body section 2 written, ~400 words\"</i>")
+                await self.send_user(body)
+                self.ledger.append("checkpoint_asked",
+                                   {"checkpoint": p["checkpoint_id"], "kind": kind})
+                return
+            if kind == "deliver":
+                blk = next((bk for bk in self.db.blocks(due.date())
+                            if bk["start_min"] <= minute < bk["end_min"]), None)
+                said = self.deliver.declared_for(due.date(), blk) if blk else ""
+                body = ("📦 block's ending — show me it.\n\n"
+                        + (f"you said: <i>{html.escape(said)}</i>\n\n" if said else "")
+                        + "photo of it, clock in the shot. this is the one that counts.")
+                await self.send_user(body)
+                self.ledger.append("checkpoint_asked",
+                                   {"checkpoint": p["checkpoint_id"], "kind": kind})
+                return
             if kind == "bed":
                 body = pick([
                     "bedtime bro 🛏 send me a pic of your bed, opened. siren stops when it lands",
@@ -3920,6 +4090,21 @@ class LockstepBot:
                       for g in goals]
         else:
             lines.append("\n▫️ No goals were set for this day.")
+        # What he said each block would produce, and what arrived. This is the
+        # part that separates a day of sitting in front of the right documents
+        # from a day of work, and the part worth his father reading.
+        if self.deliver.enabled:
+            got, said = self.deliver.score(day)
+            body = self.deliver.describe(day)
+            if said:
+                lines.append(f"\n<b>Targets hit {got}/{said}</b>")
+                lines.append(f"<code>{html.escape(body)}</code>")
+            else:
+                lines.append("\n▫️ No block targets were set.")
+        if self.steps.enabled:
+            done, named = self.steps.score(day)
+            if named:
+                lines.append(f"10-min steps finished {done}/{named}")
         if self.standups.enabled:
             done, asked = self.standups.score(day)
             if asked:
