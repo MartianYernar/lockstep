@@ -128,6 +128,10 @@ class Database:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         dhave = {r["name"] for r in self.conn.execute("PRAGMA table_info(days)")}
+        chave = {r["name"] for r in self.conn.execute("PRAGMA table_info(checkpoints)")}
+        if "deferred" not in chave:
+            self.conn.execute(
+                "ALTER TABLE checkpoints ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0")
         if "extend_minutes" not in dhave:
             self.conn.execute("ALTER TABLE days ADD COLUMN extend_minutes INTEGER NOT NULL DEFAULT 0")
         if "bed_offset_minutes" not in dhave:

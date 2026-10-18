@@ -179,6 +179,7 @@ class Coach:
         self.last_lock_plan = False
         # Filled in before each reply by the bot, which owns the fetching.
         self.doc_today = ""
+        self.steps_today = ""
         self.last_on_paper: str | None = None
 
     # -- config ---------------------------------------------------------------
@@ -320,6 +321,12 @@ class Coach:
         if terms:
             out.append("His shorthand: " + "; ".join(
                 f"{t['term']} = {t['meaning']}" for t in terms))
+
+        micro = getattr(self, "steps_today", "")
+        if micro:
+            out.append("The ten-minute steps he has written today "
+                       "(✓ = he said he finished it):")
+            out.append(micro)
 
         said = self.standups.describe(day)
         if said:

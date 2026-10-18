@@ -17,6 +17,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 
 from . import images, planner, reminders, vision
 from .dailydoc import DailyDoc
+from .microsteps import DONE_WORDS, Steps
 from .config import _hhmm
 from .lock import LockError
 
@@ -54,6 +55,7 @@ class LockstepBot:
         self.agenda = Agenda(db, cfg, self.tasks)
         self.coach.agenda = self.agenda
         self.doc = DailyDoc(cfg)
+        self.steps = Steps(db, cfg)
         self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda, self.doc)
         from .dayplan import Proposals
         self.proposals = Proposals(db)
@@ -1925,6 +1927,91 @@ class LockstepBot:
         except Forbidden:
             await self._on_blocked()
 
+    async def _steps_tick(self, now: datetime) -> None:
+        """Ask for the next small step, on the ten-minute marks of a block."""
+        st = self.steps
+        if not st.enabled or not self.engine.in_window(now):
+            return
+        day, minute = now.date(), now.hour * 60 + now.minute
+        if self.engine.quiet_now(now) is not None:
+            return
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None or (blk["category"] or "").lower() in st.skip_categories():
+            return
+        every = st.every()
+        since = minute - blk["start_min"]
+        if since < every or since % every:
+            return
+        # A photo is due this minute: the question rides along with it rather
+        # than arriving as a second notification.
+        if self._photo_due_near(day, blk["id"], now):
+            return
+        if not self.db.claim(f"microstep:{day}:{minute}"):
+            return
+        open_step = st.open_step(now)
+        n = st.ask(now, blk["label"])
+        if open_step is not None:
+            await self.send_user(
+                f"⏱ still on: <i>{html.escape(open_step['step'])}</i>\n"
+                "done? say so and tell me the next one. or just send the next step.")
+        else:
+            await self.send_user(f"⏱ {st.question(n)}")
+
+    async def _handle_step_text(self, update: Update, text: str, now: datetime) -> bool:
+        """His side of the loop: a step, or "done". True if it was one.
+
+        Deliberately free: no model, no budget, instant reply. The whole point
+        is that answering is cheaper than not answering.
+        """
+        st = self.steps
+        if not st.enabled or len(text) > 300:
+            return False
+        day = now.date()
+        blk = next((b for b in self.db.blocks(day)
+                    if b["start_min"] <= now.hour * 60 + now.minute < b["end_min"]), None)
+        if DONE_WORDS.match(text):
+            row = st.mark_done(now)
+            if row is None:
+                return False
+            done, named = st.score(day)
+            rid = st.ask(now, blk["label"] if blk else "")
+            await self.send_user(f"✅ {done} done today. {st.question(rid)}")
+            return True
+        waiting = st.waiting(now)
+        if waiting is None:
+            return False
+        if text.startswith("/") or "?" in text:
+            return False
+        st.set_step(waiting["id"], text, now)
+        await self.send_user("👊 go. tell me when it's done.")
+        return True
+
+    async def cmd_step(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/step <what> -- name the next one without waiting to be asked."""
+        if not self._is_user(update):
+            return
+        now = self.cfg.now()
+        text = update.message.text.partition(" ")[2].strip()
+        if not self.steps.enabled:
+            await update.message.reply_text(
+                "the step loop is off. turn it on with <code>micro.enabled</code>.",
+                parse_mode=ParseMode.HTML)
+            return
+        if not text:
+            cur = self.steps.open_step(now)
+            done, named = self.steps.score(now.date())
+            body = self.steps.describe(now.date()) or "  nothing yet today"
+            await update.message.reply_text(
+                f"<b>steps today</b> — {done} done of {named}\n\n{html.escape(body)}"
+                + (f"\n\non now: <i>{html.escape(cur['step'])}</i>" if cur else ""),
+                parse_mode=ParseMode.HTML)
+            return
+        blk = next((b for b in self.db.blocks(now.date())
+                    if b["start_min"] <= now.hour * 60 + now.minute < b["end_min"]), None)
+        self.steps.start_free(text, now, blk["label"] if blk else "")
+        await update.message.reply_text("👊 go. tell me when it's done.")
+
     async def _exam_day_tick(self, now: datetime) -> None:
         """Build and lock a plan for a day whose hours are already decided.
 
@@ -2076,6 +2163,11 @@ class LockstepBot:
             await self._standup_tick(now)
         except Exception as exc:                              # noqa: BLE001
             log.warning("standup tick failed: %s", exc)
+
+        try:
+            await self._steps_tick(now)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("step loop failed: %s", exc)
 
         try:
             await self._exam_day_tick(now)
@@ -2809,7 +2901,13 @@ class LockstepBot:
         label = cp["label"] or "your planned task"
         category = cp["category"] or "other"
         await update.message.chat.send_action("typing")
-        verdict = await self.validator.check(blob, self.coach.terms.expand(label), category,
+        # What he said he was doing this minute, so the photo is checked
+        # against the claim and not only the block's name.
+        claimed = self.steps.current_text(now) if self.steps.enabled else ""
+        for_checker = self.coach.terms.expand(label)
+        if claimed:
+            for_checker += f" (right now, in his words: {self.coach.terms.expand(claimed)})"
+        verdict = await self.validator.check(blob, for_checker, category,
                                              now, mime=mime, kind=cp["kind"] or "activity")
         # Whatever happened, Friday hears it. 10 Oct 20:48 a photo was refused
         # for "your name or login", he wrote "these aren't my name and login",
@@ -3030,6 +3128,13 @@ class LockstepBot:
             await self._handle_disable_reason(update, text)
             return
 
+        # The ten-minute loop gets first refusal on a short message: it is
+        # free, instant, and the answer to "next step?" must not cost him an
+        # AI call or arrive forty seconds later.
+        if self._is_user(update) and await self._handle_step_text(
+                update, text, self.cfg.now()):
+            return
+
         # "i am filling out info still bro" / "need 20 more mins on this" is
         # the other shape, and the one Friday got wrong on 11 Oct: it said it
         # had stretched the block and nothing moved.
@@ -3102,6 +3207,8 @@ class LockstepBot:
         await update.message.chat.send_action("typing")
         try:
             await self._load_doc(now)
+            if self.steps.enabled:
+                self.coach.steps_today = self.steps.describe(now.date())
             note = self._reject_note(now)
             waiting = self.pending.get(update.effective_chat.id) or {}
             if waiting.get("action") == "plan_proposal":
@@ -3850,6 +3957,7 @@ class LockstepBot:
             ("tasks", self.cmd_tasks), ("task", self.cmd_task),
             ("doc", self.cmd_doc), ("today2", self.cmd_doc),
             ("eat", self.cmd_eat), ("food", self.cmd_eat),
+            ("step", self.cmd_step), ("steps2", self.cmd_step),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup), ("paper", self.cmd_paper),

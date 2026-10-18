@@ -93,6 +93,38 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def _steps(self):
+        try:
+            from .microsteps import Steps
+            s = Steps(self.db, self.cfg)
+            return s if s.enabled else None
+        except Exception:                                     # noqa: BLE001
+            return None
+
+    def _defer_for_steps(self, cp, due: datetime, now: datetime) -> bool:
+        """Let a photo slip while the ten-minute loop is being answered.
+
+        He writes the next small step and says when it is done, every ten
+        minutes. While that is live the photo cadence relaxes -- 20 minutes
+        becomes 30 -- because there is a running account of the work in his
+        own words, and the photo that does come is checked against it.
+
+        Once per checkpoint, never for the first proof of a block, and never
+        for bed. Stop answering and nothing is deferred: the looser cadence is
+        bought by staying in the loop, not granted.
+        """
+        steps = self._steps()
+        if steps is None or cp["kind"] == "bed" or cp["deferred"]:
+            return False
+        slip = int(steps.conf.get("defer_photo_min", 10))
+        if slip <= 0 or not steps.alive(now):
+            return False
+        if self.is_first_of_block(due.date(), cp["id"]):
+            return False
+        self.db.run("UPDATE checkpoints SET due_at = ?, deferred = 1 WHERE id = ?",
+                    ((due + timedelta(minutes=slip)).isoformat(), cp["id"]))
+        return True
+
     def _routines(self):
         try:
             from .routines import Routines
@@ -784,6 +816,9 @@ class Engine:
             grace = timedelta(minutes=self.cfg.grace_min)
             for cp in self.checkpoints(day):
                 due = datetime.fromisoformat(cp["due_at"])
+                if cp["state"] == "scheduled" and due <= now \
+                        and self._defer_for_steps(cp, due, now):
+                    continue
                 if cp["state"] == "scheduled" and due <= now:
                     self.db.run(
                         "UPDATE checkpoints SET state='asked', asked_at=? WHERE id=?",
