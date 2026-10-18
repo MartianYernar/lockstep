@@ -19,6 +19,7 @@ from . import images, planner, reminders, vision
 from .dailydoc import DailyDoc
 from .deliverables import Deliverables
 from .microsteps import DONE_WORDS, Steps
+from .penalty import Penalties
 from .config import _hhmm
 from .lock import LockError
 
@@ -58,6 +59,7 @@ class LockstepBot:
         self.doc = DailyDoc(cfg)
         self.steps = Steps(db, cfg)
         self.deliver = Deliverables(db, cfg)
+        self.penalty = Penalties(db, cfg)
         self.dayplanner = DayPlanner(self.coach, cfg, db, self.agenda, self.doc)
         from .dayplan import Proposals
         self.proposals = Proposals(db)
@@ -3213,7 +3215,60 @@ class LockstepBot:
                 parse_mode=ParseMode.HTML)
             self._app_note(now, f"he did NOT deliver \"{declared[:120]}\" for "
                                 f"{blk['label']}: {data.get('reason', '')[:120]}")
+            await self._owe_drill(now, "target missed", blk["label"])
         return True
+
+    async def _owe_drill(self, now: datetime, reason: str, label: str = "") -> None:
+        """One SAT drill, his own punishment, on top of the miss -- not instead.
+
+        18 Oct: "doing 10 questions of sat, one minute each, and i need to get
+        do over and over until i get at least 8/10, each time new questions...
+        until i dont send that 8/10 siren should keep firing".
+        """
+        if not self.penalty.enabled:
+            return
+        rid = self.penalty.owe(now, reason, label)
+        if rid is None:
+            return                     # already at the day's cap
+        self.ledger.append("penalty_owed", {"reason": reason, "label": label[:120]})
+        p = self.penalty
+        await self.send_user(
+            f"⚡ that's a drill. {p.questions()} questions, {p.seconds_each()}s each, "
+            f"{p.pass_score()}/{p.questions()} to clear.\n{p.url()}\n\n"
+            f"siren runs till the app sends the score. {p.owed()} owed.")
+        self._app_note(now, f"he owes an SAT drill ({reason}: {label[:60]}); the siren "
+                            "runs until the app reports a passing score")
+
+    async def on_penalty_paid(self, result: str, left: int, now: datetime) -> None:
+        """The drill app reported a pass. Called from the API."""
+        await self.send_user(
+            f"✅ {result} — drill cleared."
+            + (f" {left} still owed." if left else " nothing owed, siren's off. back to it."))
+        self._app_note(now, f"he passed the drill ({result}); {left} still owed")
+
+    async def cmd_drill(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/drill -- what is owed, and the link to pay it."""
+        if not self._is_user(update):
+            return
+        if not self.penalty.enabled:
+            await update.message.reply_text("drills are off.")
+            return
+        p = self.penalty
+        owed = p.owed()
+        if not owed:
+            done = [d for d in p.recent(self.cfg.now()) if d["passed"]]
+            await update.message.reply_text(
+                "nothing owed 👌" + (f" ({len(done)} drill(s) passed today)" if done else ""))
+            return
+        row = p.next_one()
+        await update.message.reply_text(
+            f"⚡ <b>{owed} drill{'s' if owed != 1 else ''} owed</b>\n"
+            f"{p.questions()} questions · {p.seconds_each()}s each · "
+            f"{p.pass_score()}/{p.questions()} to clear\n"
+            f"for: {html.escape(row['reason'])}"
+            + (f" — {html.escape(row['label'][:60])}" if row["label"] else "")
+            + f"\n\n{p.url()}\n\nthe app sends the score itself when you finish.",
+            parse_mode=ParseMode.HTML)
 
     def _save_photo(self, blob: bytes, day: date, tag: str,
                     dimension: int | None = None) -> str | None:
@@ -4101,6 +4156,11 @@ class LockstepBot:
                 lines.append(f"<code>{html.escape(body)}</code>")
             else:
                 lines.append("\n▫️ No block targets were set.")
+        if self.penalty.enabled:
+            body = self.penalty.describe(day)
+            if body:
+                lines.append("\n<b>Drills</b>")
+                lines.append(f"<code>{html.escape(body)}</code>")
         if self.steps.enabled:
             done, named = self.steps.score(day)
             if named:
@@ -4143,6 +4203,7 @@ class LockstepBot:
             ("doc", self.cmd_doc), ("today2", self.cmd_doc),
             ("eat", self.cmd_eat), ("food", self.cmd_eat),
             ("step", self.cmd_step), ("steps2", self.cmd_step),
+            ("drill", self.cmd_drill), ("punish", self.cmd_drill),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup), ("paper", self.cmd_paper),

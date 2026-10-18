@@ -67,9 +67,23 @@ def _open_tasks(db) -> int | None:
 BAD_TOKEN = {"n": 0, "last": None}
 
 
+@web.middleware
+async def _cors(request, handler):
+    """The drill app runs on vercel.app and on localhost; it has to be able to
+    report a score from either."""
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+    else:
+        resp = await handler(request)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Lockstep-Token"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return resp
+
+
 def build_app(cfg, engine, ledger) -> web.Application:
     token = cfg.api["token"]
-    app = web.Application()
+    app = web.Application(middlewares=[_cors])
 
     async def health(_request: web.Request) -> web.Response:
         """Unauthenticated, so it says what is switched on and nothing more.
@@ -100,6 +114,7 @@ def build_app(cfg, engine, ledger) -> web.Application:
             # but talking to a door that will not open.
             "bad_token_polls": BAD_TOKEN["n"],
             "owed_now": engine.agent_state(cfg.now()).debt_minutes,
+            "drills_owed": engine.penalty_owed(),
         })
 
     async def state(request: web.Request) -> web.Response:
@@ -219,6 +234,74 @@ def build_app(cfg, engine, ledger) -> web.Application:
                                          "debt_min": st.get("debt_minutes", 0)})
         return web.Response(text=str(gap_s), content_type="text/plain")
 
+    async def sat(request: web.Request) -> web.Response:
+        """His drill app reports a result here, and a penalty is paid.
+
+        Its own token (api.sat_token), because this one lives in a browser he
+        can open anywhere: it can pay a penalty and do nothing else -- it
+        cannot read his day, mark a photo, or tell the server his phone is
+        alive.
+
+        A session id is spent once. Without that, one good 9/10 screenshot
+        would clear every penalty he ever earns.
+        """
+        token = cfg.api.get("sat_token") or cfg.api["token"]
+        if not _authorised(request, token):
+            log.warning("sat: unauthorised result from %s", request.remote)
+            return web.json_response({"error": "unauthorised"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:                                     # noqa: BLE001
+            body = dict(request.query)
+        from .penalty import Penalties
+        pen = Penalties(engine.db, cfg)
+        if not pen.enabled:
+            return web.json_response({"ok": False, "error": "penalties are off"})
+        session = str(body.get("session") or "").strip()[:80]
+        try:
+            score = int(body.get("score"))
+            total = int(body.get("total"))
+            seconds = int(body.get("seconds") or 0)
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "need score and total"},
+                                     status=400)
+        if not session:
+            return web.json_response({"ok": False, "error": "need a session id"},
+                                     status=400)
+        if pen.seen_session(session):
+            return web.json_response({"ok": False, "error": "that drill was already sent"})
+        now = cfg.now()
+        passed, why = pen.judge(score, total, seconds)
+        row = pen.next_one()
+        pen.record(session, score, total, seconds, passed, now,
+                   row["id"] if row and passed else None)
+        if not passed:
+            if row:
+                pen.bump(row["id"])
+            ledger.append("drill_failed", {"score": score, "total": total,
+                                           "seconds": seconds, "why": why})
+            return web.json_response({"ok": False, "cleared": False, "reason": why,
+                                      "owed": pen.owed()})
+        if row is None:
+            ledger.append("drill_done", {"score": score, "total": total, "owed": 0})
+            return web.json_response({"ok": True, "cleared": False,
+                                      "reason": "nothing was owed — nice anyway",
+                                      "owed": 0})
+        pen.pay(row["id"], now, {"result": why, "session": session})
+        ledger.append("penalty_paid", {"id": row["id"], "result": why,
+                                       "reason": row["reason"]})
+        left = pen.owed()
+        cb = getattr(cfg, "on_penalty_paid", None)
+        if cb is not None:
+            try:
+                await cb(why, left, now)
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("could not announce the drill: %s", exc)
+        return web.json_response({"ok": True, "cleared": True, "result": why,
+                                  "owed": left})
+
+    app.router.add_post("/agent/sat", sat)
+    app.router.add_get("/agent/sat", sat)
     app.router.add_get("/health", health)
     app.router.add_get("/agent/state", state)
     app.router.add_get("/agent/siren", siren)

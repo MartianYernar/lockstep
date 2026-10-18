@@ -55,6 +55,10 @@ def main() -> None:
     lock = Lock(cfg, db, ledger)
     validator = Validator(cfg)
     bot = LockstepBot(cfg, db, ledger, engine, lock, validator)
+    # The API answers his drill app; when a penalty is paid there, the bot is
+    # the thing that can tell him. Set after the bot exists -- setting it one
+    # line earlier crash-looped the server on 18 Oct.
+    cfg.on_penalty_paid = bot.on_penalty_paid
 
     intact, bad = ledger.verify()
     if not intact:

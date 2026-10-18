@@ -93,6 +93,18 @@ class Engine:
         self.db = db
         self.ledger = ledger
 
+    def _penalties(self):
+        try:
+            from .penalty import Penalties
+            p = Penalties(self.db, self.cfg)
+            return p if p.enabled else None
+        except Exception:                                     # noqa: BLE001
+            return None
+
+    def penalty_owed(self) -> int:
+        p = self._penalties()
+        return p.owed() if p is not None and p.sirens() else 0
+
     def _deliverables(self):
         try:
             from .deliverables import Deliverables
@@ -744,7 +756,25 @@ class Engine:
         if self.quiet_now(now) is not None:
             return idle
 
+        owed = self.penalty_owed()
         debt = self.debt_seconds(day, now)
+        if debt <= 0 and owed:
+            # His own rule, 18 Oct: miss the target and the siren runs until
+            # the drill is passed. Inside the window only -- sleep never pays
+            # for a missed block, and an unpaid one simply carries to tomorrow.
+            p = self._penalties()
+            e2 = self.cfg.esc
+            return AgentState(
+                active=True, level=1, debt_minutes=0, phone_alarm=True,
+                alarm_volume_pct=int(e2.get("phone_alarm_volume_pct", 55)),
+                alarm_repeats=int(e2.get("phone_repeats_base", 1)),
+                poll_sec=int(e2.get("phone_poll_sec", 60)),
+                apps_blocked=self.apps_blocked(now),
+                headline=f"{owed} SAT drill{'s' if owed != 1 else ''} owed — "
+                         f"{p.pass_score()}/{p.questions()} to clear",
+                detail="You missed what you said you'd finish. One drill, "
+                       f"{p.questions()} questions at {p.seconds_each()}s. "
+                       "The siren stops when the app reports the score.")
         if debt <= 0:
             # Nothing owed, but a phone about to die is a siren about to stop.
             # Checked last, so it never overrides a real checkpoint -- being
