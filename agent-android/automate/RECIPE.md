@@ -341,3 +341,103 @@ If a plan that small is ever tight, the cheapest saving is polling less often
 outside the enforcement window -- block 7's delay is 1 minute; at 5 minutes the
 whole thing drops to about 0.02 GB/month. The cost is that coming back online is
 noticed up to 5 minutes late.
+
+---
+
+## Flow 3 — Push-ups (the penalty counter)
+
+18 Oct 2026: "we need to add punishment of push ups, i just dont know how to
+send proof of it though". The phone counts them. It lies on the floor under
+your chest; every rep covers the proximity sensor, and the flow posts the
+count to the server, which decides whether the timing looks like a human
+doing push-ups.
+
+Start it from a home-screen shortcut (block 1 → **INSTALL HOME SCREEN
+SHORTCUT**), not from a schedule.
+
+```
+1  Flow beginning
+     ↓
+2  Variable set        reps = 0, amax = 0
+     ↓
+3  Variable set        t0 = clock("realtime")
+     ↓
+4  Proximity    ──────  Proceed: WHEN CHANGED, Maximum distance: 5
+     ↓  (near: chest down)
+5  Proximity    ──────  Proceed: WHEN CHANGED, Minimum distance: 5
+     ↓  (far: back up — that is one rep)
+6  Device acceleration  (Immediately) → acc
+     ↓
+7  Variable set        amax = max(amax, acc)      ← was the PHONE moving?
+     ↓
+8  Variable set        reps = reps + 1
+     ↓
+9  Expression true?    reps >= 20
+     │ NO → back to 4
+     ↓ YES
+10 HTTP request        POST .../agent/reps?token=SAT_TOKEN
+     ↓
+11 Notification show   the server's answer
+```
+
+### Block settings
+
+**2 · Variable set** — `reps`, value `0`.
+**3 · Variable set** — `t0`, value via **fx**: `clock("realtime")`.
+
+**4 · Proximity** — Proceed: **When changed**, Maximum distance `5`.
+  Fires when something comes within 5 cm: your chest at the bottom of the rep.
+
+**5 · Proximity** — Proceed: **When changed**, Minimum distance `5`.
+  Fires when it goes away again. The pair is one rep, which is why the sensor
+  has to see your chest and not your shirt lying over it.
+
+**6 · Device acceleration** — Proceed: **Immediately**, no minimum or maximum,
+  Output variable *Current acceleration* → `acc`. Gravity is filtered out of
+  this reading, so a phone lying on the floor reads about 0.
+
+**7 · Variable set** — `amax`, value via **fx**: `max(amax, acc)`.
+  His own objection, 18 Oct: *"i could slack off by moving phone up and down
+  to the floor"*. He could -- and that is the phone accelerating, several
+  m/s² of it, while a real push-up leaves the phone exactly where it is. The
+  server refuses the set when this passes `penalty.pushups.max_motion` (2.0).
+
+**8 · Variable set** — `reps`, value via **fx**: `reps + 1`.
+
+**9 · Expression true?** — `reps >= 20`. `NO` → block 4. `YES` → block 10.
+
+**10 · HTTP request**
+- Method: **POST**
+- URL: `https://<your-app>.up.railway.app/agent/reps?token=YOUR_SAT_TOKEN`
+- Content type: `application/json`
+- Request body, via **fx**:
+
+  ```
+  "{\"session\":\"" + t0 + "\",\"reps\":" + reps +
+  ",\"seconds\":" + ((clock("realtime") - t0) / 1000) +
+  ",\"motion\":" + amax + "}"
+  ```
+
+- Save response: **Save to variable as text** → `answer`
+
+**11 · Notification show** — Message: `answer`. It will say either
+`"cleared": true` or why it was refused.
+
+### What this proves, and what it does not
+
+Three cheats, two of them closed:
+
+- **A hand waved over the sensor, fast.** The server checks the clock: 20 reps
+  must take roughly 22 seconds to two minutes. Faster is a hand.
+- **Lifting the phone to the floor and back**, which is what he thought of
+  first. That is the phone accelerating, and block 7 measures exactly that.
+  A real push-up leaves the phone still.
+- **Lying on the floor covering a still sensor at push-up pace.** Not closed,
+  and no sensor on his own phone can close it: nothing distinguishes a hand
+  from a chest. What is left is that faking it costs nearly as much attention
+  as the set, for a minute, lying on the floor. The cost of cheating goes up;
+  it never goes infinite. The only thing that would is somebody in the room.
+
+The token here is the **SAT token** (`api.sat_token`), not the main one. It
+can pay a penalty and nothing else: it cannot read the day, satisfy a photo
+check, or tell the server the phone is alive.

@@ -86,6 +86,48 @@ class Penalties:
     def url(self) -> str:
         return str(self.conf.get("url", "https://sat-speedy-training.vercel.app"))
 
+    # -- the physical one ------------------------------------------------------
+    def pushups_on(self) -> bool:
+        return bool((self.conf.get("pushups") or {}).get("enabled", False))
+
+    def reps(self) -> int:
+        return int((self.conf.get("pushups") or {}).get("reps", 20))
+
+    def rep_seconds(self) -> tuple[float, float]:
+        """How long a real set takes. Faster than the floor is a hand over the
+        sensor; slower than the ceiling is the phone left on a desk."""
+        p = self.conf.get("pushups") or {}
+        return (float(p.get("min_seconds_per_rep", 1.1)),
+                float(p.get("max_seconds_per_rep", 6.0)))
+
+    def max_motion(self) -> float:
+        """How much the phone itself may move, in m/s^2 with gravity removed.
+
+        18 Oct, his own objection: "i could slack off by moving phone up and
+        down to the floor". In a real push-up the phone lies still and HE
+        moves; lifting it to the floor and back is the phone accelerating.
+        A phone at rest reads about zero, so anything past a couple of m/s^2
+        is a phone being waved.
+        """
+        return float((self.conf.get("pushups") or {}).get("max_motion", 2.0))
+
+    def judge_reps(self, reps: int, seconds: float,
+                   motion: float | None = None) -> tuple[bool, str]:
+        want = self.reps()
+        if reps < want:
+            return False, f"{reps} of {want}"
+        lo, hi = self.rep_seconds()
+        if seconds and seconds < reps * lo:
+            return False, (f"{reps} in {int(seconds)}s is faster than a push-up — "
+                           "that reads as a hand over the sensor")
+        if seconds and seconds > reps * hi:
+            return False, (f"{int(seconds)}s for {reps} — too slow to be a set, "
+                           "the phone was probably sitting there")
+        if motion is not None and motion > self.max_motion():
+            return False, (f"the phone was moving ({motion:.1f} m/s²) — it stays on "
+                           "the floor and you move, not the other way round")
+        return True, f"{reps} push-ups in {int(seconds)}s"
+
     # -- owing -----------------------------------------------------------------
     def owe(self, now: datetime, reason: str, label: str = "") -> int | None:
         """Add one. Capped per day: a bad evening should not become homework

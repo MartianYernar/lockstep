@@ -300,6 +300,66 @@ def build_app(cfg, engine, ledger) -> web.Application:
         return web.json_response({"ok": True, "cleared": True, "result": why,
                                   "owed": left})
 
+    async def reps(request: web.Request) -> web.Response:
+        """Push-ups, counted by the phone, paying off the same penalty."""
+        token = cfg.api.get("sat_token") or cfg.api["token"]
+        if not _authorised(request, token):
+            log.warning("reps: unauthorised result from %s", request.remote)
+            return web.json_response({"error": "unauthorised"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:                                     # noqa: BLE001
+            body = dict(request.query)
+        from .penalty import Penalties
+        pen = Penalties(engine.db, cfg)
+        if not pen.enabled or not pen.pushups_on():
+            return web.json_response({"ok": False, "error": "push-ups are off"})
+        session = str(body.get("session") or "").strip()[:80]
+        try:
+            count = int(body.get("reps"))
+            seconds = float(body.get("seconds") or 0)
+            motion = body.get("motion")
+            motion = float(motion) if motion not in (None, "") else None
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "need reps and seconds"},
+                                     status=400)
+        if not session:
+            return web.json_response({"ok": False, "error": "need a session id"},
+                                     status=400)
+        if pen.seen_session(session):
+            return web.json_response({"ok": False, "error": "that set was already sent"})
+        now = cfg.now()
+        passed, why = pen.judge_reps(count, seconds, motion)
+        row = pen.next_one()
+        pen.record(session, count, pen.reps(), int(seconds), passed, now,
+                   row["id"] if row and passed else None)
+        if not passed:
+            if row:
+                pen.bump(row["id"])
+            ledger.append("reps_failed", {"reps": count, "seconds": int(seconds),
+                                          "motion": motion, "why": why})
+            return web.json_response({"ok": False, "cleared": False, "reason": why,
+                                      "owed": pen.owed()})
+        if row is None:
+            ledger.append("reps_done", {"reps": count, "owed": 0})
+            return web.json_response({"ok": True, "cleared": False,
+                                      "reason": "nothing was owed — nice anyway",
+                                      "owed": 0})
+        pen.pay(row["id"], now, {"result": why, "session": session})
+        ledger.append("penalty_paid", {"id": row["id"], "result": why,
+                                       "reason": row["reason"], "how": "pushups"})
+        left = pen.owed()
+        cb = getattr(cfg, "on_penalty_paid", None)
+        if cb is not None:
+            try:
+                await cb(why, left, now)
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("could not announce the set: %s", exc)
+        return web.json_response({"ok": True, "cleared": True, "result": why,
+                                  "owed": left})
+
+    app.router.add_post("/agent/reps", reps)
+    app.router.add_get("/agent/reps", reps)
     app.router.add_post("/agent/sat", sat)
     app.router.add_get("/agent/sat", sat)
     app.router.add_get("/health", health)

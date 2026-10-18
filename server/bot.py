@@ -3232,10 +3232,13 @@ class LockstepBot:
             return                     # already at the day's cap
         self.ledger.append("penalty_owed", {"reason": reason, "label": label[:120]})
         p = self.penalty
-        await self.send_user(
-            f"⚡ that's a drill. {p.questions()} questions, {p.seconds_each()}s each, "
-            f"{p.pass_score()}/{p.questions()} to clear.\n{p.url()}\n\n"
-            f"siren runs till the app sends the score. {p.owed()} owed.")
+        ways = (f"⚡ that's one to pay off. either:\n"
+                f"• {p.questions()} SAT questions, {p.seconds_each()}s each, "
+                f"{p.pass_score()}/{p.questions()} to clear — {p.url()}\n"
+                + (f"• {p.reps()} push-ups, phone on the floor under your chest\n"
+                   if p.pushups_on() else "")
+                + f"\nsiren runs till one of them lands. {p.owed()} owed.")
+        await self.send_user(ways)
         self._app_note(now, f"he owes an SAT drill ({reason}: {label[:60]}); the siren "
                             "runs until the app reports a passing score")
 
@@ -3262,12 +3265,15 @@ class LockstepBot:
             return
         row = p.next_one()
         await update.message.reply_text(
-            f"⚡ <b>{owed} drill{'s' if owed != 1 else ''} owed</b>\n"
-            f"{p.questions()} questions · {p.seconds_each()}s each · "
-            f"{p.pass_score()}/{p.questions()} to clear\n"
+            f"⚡ <b>{owed} owed</b>\n"
             f"for: {html.escape(row['reason'])}"
             + (f" — {html.escape(row['label'][:60])}" if row["label"] else "")
-            + f"\n\n{p.url()}\n\nthe app sends the score itself when you finish.",
+            + f"\n\n<b>either</b>\n"
+            f"• {p.questions()} SAT questions · {p.seconds_each()}s each · "
+            f"{p.pass_score()}/{p.questions()}\n  {p.url()}\n"
+            + (f"• {p.reps()} push-ups · phone on the floor, it counts them\n"
+               if p.pushups_on() else "")
+            + "\nboth report themselves — nothing to screenshot.",
             parse_mode=ParseMode.HTML)
 
     def _save_photo(self, blob: bytes, day: date, tag: str,

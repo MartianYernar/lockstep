@@ -195,7 +195,7 @@ check("nothing owed says so", "nothing owed" in u.message.last, True)
 run(bot._owe_drill(N(18, 5), "target missed", "work: physics"))
 u = FakeUpdate("/drill")
 run(bot.cmd_drill(u, None))
-check("owed shows the shape of it", "10 questions" in u.message.last
+check("owed shows both ways to pay", "SAT questions" in u.message.last
       and "8/10" in u.message.last, True)
 check("and the link", "sat-speedy-training" in u.message.last, True)
 
@@ -210,6 +210,65 @@ bot.penalty.pay(row["id"], N(18, 40), {"result": "9/10"})
 check("paying the drill does not unmiss the photo", db.one(
     "SELECT COUNT(*) c FROM checkpoints WHERE date=? AND state='missed'",
     (DAY.isoformat(),))["c"], 1)
+
+print("\n=== push-ups, counted by the phone ===")
+cfg, db, led, eng, bot = make(pushups={"enabled": True, "reps": 20,
+                                       "min_seconds_per_rep": 1.1,
+                                       "max_seconds_per_rep": 6.0})
+p = bot.penalty
+check("twenty at a human pace clears it", p.judge_reps(20, 40)[0], True)
+check("nineteen does not", p.judge_reps(19, 40)[0], False)
+check("and it says how many were short", "19 of 20" in p.judge_reps(19, 40)[1], True)
+check("twenty in eight seconds is a hand over the sensor", p.judge_reps(20, 8)[0], False)
+check("and it says so", "hand over the sensor" in p.judge_reps(20, 8)[1], True)
+check("twenty over five minutes is a phone on a desk", p.judge_reps(20, 300)[0], False)
+check("the slow one is named too", "too slow" in p.judge_reps(20, 300)[1], True)
+check("the edges are fair", (p.judge_reps(20, 23)[0], p.judge_reps(20, 115)[0]),
+      (True, True))
+
+
+async def reps_case():
+    cfg2, db2, led2, eng2, bot2 = make(pushups={"enabled": True, "reps": 20,
+                                                "min_seconds_per_rep": 1.1,
+                                                "max_seconds_per_rep": 6.0})
+    told = {}
+
+    async def on_paid(result, left, now):
+        told["result"] = result
+    cfg2.on_penalty_paid = on_paid
+    await bot2._owe_drill(N(18, 5), "target missed", "work: physics")
+    app = build_app(cfg2, eng2, led2)
+    tok = cfg2.api.get("sat_token") or cfg2.api["token"]
+    async with TestClient(TestServer(app)) as cl:
+        r = await cl.post(f"/agent/reps?token={tok}",
+                          json={"session": "p1", "reps": 20, "seconds": 44})
+        body = await r.json()
+        check("a real set clears it over HTTP",
+              (body["ok"], body["cleared"], body["owed"]), (True, True, 0))
+        check("and he is told", told.get("result"), "20 push-ups in 44s")
+
+        await bot2._owe_drill(N(18, 30), "target missed", "work: essay")
+        r = await cl.post(f"/agent/reps?token={tok}",
+                          json={"session": "p2", "reps": 20, "seconds": 6})
+        check("waving a hand does not", (await r.json())["owed"], 1)
+
+        r = await cl.post(f"/agent/reps?token={tok}",
+                          json={"session": "p1", "reps": 20, "seconds": 44})
+        check("one set cannot be sent twice", (await r.json())["ok"], False)
+
+        r = await cl.post("/agent/reps?token=nope", json={"session": "p9", "reps": 20})
+        check("wrong token, no", r.status, 401)
+
+        r = await cl.post(f"/agent/sat?token={tok}",
+                          json={"session": "s9", "score": 9, "total": 10, "seconds": 58})
+        check("either road pays the same debt", (await r.json())["owed"], 0)
+
+run(reps_case())
+
+cfg, db, led, eng, bot = make(pushups={"enabled": False})
+run(bot._owe_drill(N(18, 5), "target missed", "x"))
+check("with push-ups off only the drill is offered",
+      "push-ups" in sent(bot)[-1], False)
 
 print("\n=== switched off ===")
 cfg, db, led, eng, bot = make(enabled=False)
