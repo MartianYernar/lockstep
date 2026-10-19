@@ -534,11 +534,13 @@ class Engine:
             # ninety minutes of sitting in front of the right document used to
             # count as a perfect block.
             if self._wants_deliverable(b):
-                if not any(qs <= lo < qe for qs, qe in quiet):
-                    out.append((lo, b["id"], "declare"))
-                last = min(b["end_min"], end) - 1
-                if last > lo and not any(qs <= last < qe for qs, qe in quiet):
-                    out.append((last, b["id"], "deliver"))
+                d = self._deliverables()
+                for seg in d.segments(b, start, end):
+                    s0, s1 = seg["start_min"], seg["end_min"] - 1
+                    if not any(qs <= s0 < qe for qs, qe in quiet):
+                        out.append((s0, b["id"], "declare"))
+                    if s1 > s0 and not any(qs <= s1 < qe for qs, qe in quiet):
+                        out.append((s1, b["id"], "deliver"))
 
             # The target question owns the block's first minute, so the photo
             # that follows it starts one gap later -- two checkpoints cannot
@@ -561,7 +563,9 @@ class Engine:
             # day, of which 9 were answered. The honest test is whether you
             # still answer them in a week.
             every = int(self.cfg.raw.get("proof", {}).get("within_block_min", 0))
-            if every > 0:
+            segmented = (self._wants_deliverable(b)
+                         and self._deliverables().every() > 0)
+            if every > 0 and not segmented:
                 minute = lo + every
                 last = min(b["end_min"], end) - 1
                 while minute < min(b["end_min"], end):

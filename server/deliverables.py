@@ -85,6 +85,58 @@ class Deliverables:
             "skip_categories", ["commute", "meal", "sleep", "relax", "clean",
                                 "skincare", "sport"])}
 
+    def every(self) -> int:
+        """Minutes per target. 0 means one per block.
+
+        19 Oct: "i think the declaration should be each 25mins". Ninety
+        minutes is long enough to drift for an hour and still hand something
+        in at the end; twenty-five is short enough that drift shows up while
+        there is still a day left to fix it.
+        """
+        return int(self.conf.get("every_min", 0))
+
+    def segments(self, block, start: int, end: int) -> list[dict]:
+        """The block, cut into stretches that each get their own target.
+
+        A leftover shorter than half a period is folded into the one before
+        it, so a 90-minute block is 25/25/40 rather than 25/25/25/15 -- a
+        fifteen-minute tail has no target worth naming.
+        """
+        lo = max(block["start_min"], start)
+        hi = min(block["end_min"], end)
+        if hi - lo < self.min_block():
+            return []
+        every = self.every()
+        if every <= 0:
+            return [{"start_min": lo, "end_min": hi, "label": block["label"],
+                     "category": block["category"]}]
+        out = []
+        cursor = lo
+        while cursor < hi:
+            stop = min(cursor + every, hi)
+            if hi - stop < max(every / 2, self.min_block()):   # fold the tail in
+                stop = hi
+            out.append({"start_min": cursor, "end_min": stop,
+                        "label": block["label"], "category": block["category"]})
+            cursor = stop
+        return out
+
+    def current(self, day: date, blocks, minute: int) -> dict | None:
+        """The stretch he is in right now, if it has a target."""
+        blk = next((b for b in blocks
+                    if b["start_min"] <= minute < b["end_min"]), None)
+        if blk is None or not self.wants(blk):
+            return None
+        for seg in self.segments(blk, blk["start_min"], blk["end_min"]):
+            if seg["start_min"] <= minute < seg["end_min"]:
+                return seg
+        return None
+
+    def for_minute(self, day: date, blocks, minute: int) -> dict | None:
+        """The stored row for the stretch covering that minute."""
+        seg = self.current(day, blocks, minute)
+        return self.open_for(day, seg) if seg else None
+
     def wants(self, block) -> bool:
         if not self.enabled or block is None:
             return False
@@ -134,6 +186,15 @@ class Deliverables:
     def declared_for(self, day: date, block) -> str:
         row = self.open_for(day, block)
         return (row or {}).get("declared") or ""
+
+    def carry_before(self, day: date, seg, path: str | None) -> None:
+        """The photo that ended one stretch is the "before" of the next, so
+        each target is judged against where the last one left off."""
+        if not path or not seg:
+            return
+        self.db.run(
+            "UPDATE deliverables SET before_path=? WHERE date=? AND start_min=?"
+            " AND before_path IS NULL", (path, day.isoformat(), seg["start_min"]))
 
     def unsettled(self, day: date, minute: int) -> list[dict]:
         """Blocks that have ended, were declared, and nobody has judged yet."""

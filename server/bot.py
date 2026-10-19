@@ -1974,8 +1974,7 @@ class LockstepBot:
             (day.isoformat(),))
         if cp is None:
             return False
-        blk = next((b for b in self.db.blocks(day)
-                    if b["start_min"] <= minute < b["end_min"]), None)
+        blk = self.deliver.current(day, self.db.blocks(day), minute)
         if blk is None:
             return False
         if not self.deliver.declare(day, blk, text, now):
@@ -3041,18 +3040,13 @@ class LockstepBot:
         minute = now.hour * 60 + now.minute
         self.last_reject = None
         path = self._save_photo(blob, today, f"cp{cp['id']}")
-        # The first proof of a block is the "before" the end-of-block check is
-        # measured against, so it is kept at a size you can actually read a
-        # form or a page of questions in -- and dropped when the block settles.
+        # The first photo inside a stretch is the "before" its target is
+        # measured against, kept big enough to read a form or a page of
+        # questions in. set_before only writes while it is still empty, so
+        # later photos in the same stretch leave it alone.
         if self.deliver.enabled and verdict.ok:
-            blk_now = next((b for b in self.db.blocks(today)
-                            if b["start_min"] <= minute < b["end_min"]), None)
-            # The first photo that lands inside the block is the "before";
-            # set_before only writes when it is still empty, so later ones in
-            # the same block leave it alone. (The block's first checkpoint is
-            # the target question, not a photo, so "is it the first?" would
-            # never be true here.)
-            if blk_now is not None and self.deliver.wants(blk_now)                     and cp["kind"] in ("activity", "blocker_toggle"):
+            blk_now = self.deliver.current(today, self.db.blocks(today), minute)
+            if blk_now is not None and cp["kind"] in ("activity", "blocker_toggle"):
                 self.deliver.ensure(today, blk_now)
                 self.deliver.set_before(
                     today, blk_now,
@@ -3177,8 +3171,8 @@ class LockstepBot:
         the question can be the honest one: did this move?
         """
         day, minute = now.date(), now.hour * 60 + now.minute
-        blk = next((b for b in self.db.blocks(day)
-                    if b["start_min"] <= minute < b["end_min"]), None)
+        blocks = self.db.blocks(day)
+        blk = self.deliver.current(day, blocks, minute)
         row = self.deliver.open_for(day, blk) if blk else None
         declared = (row or {}).get("declared") or ""
         if not declared:
@@ -3198,6 +3192,14 @@ class LockstepBot:
                                               mime=mime, before=before)
         ok = bool(data.get("delivered")) and (before is None or data.get("moved", True))
         self.deliver.settle(row["id"], "delivered" if ok else "short", data, now)
+        nxt = self.deliver.current(day, blocks, blk["end_min"])
+        if nxt is not None:
+            self.deliver.ensure(day, nxt)
+            self.deliver.carry_before(
+                day, nxt,
+                self._save_photo(blob, day, f"before{nxt['start_min']}",
+                                 dimension=int(self.cfg.raw.get("privacy", {})
+                                               .get("compare_dimension", 768))))
         self.ledger.append("deliverable_settled", {
             "date": day.isoformat(), "label": blk["label"],
             "state": "delivered" if ok else "short",
@@ -3975,9 +3977,9 @@ class LockstepBot:
                 return options[cid % len(options)]
 
             if kind == "declare":
-                mins = next((bk["end_min"] - bk["start_min"]
-                             for bk in self.db.blocks(due.date())
-                             if bk["start_min"] == minute), 0)
+                seg = self.deliver.current(due.date(), self.db.blocks(due.date()),
+                                           minute)
+                mins = (seg["end_min"] - seg["start_min"]) if seg else 0
                 ends = minute + mins
                 body = (f"🎯 <b>{label}</b> — {mins} min.\n\n"
                         f"what will EXIST at {ends//60:02d}:{ends%60:02d} that "
@@ -3990,10 +3992,10 @@ class LockstepBot:
                                    {"checkpoint": p["checkpoint_id"], "kind": kind})
                 return
             if kind == "deliver":
-                blk = next((bk for bk in self.db.blocks(due.date())
-                            if bk["start_min"] <= minute < bk["end_min"]), None)
+                blk = self.deliver.current(due.date(), self.db.blocks(due.date()),
+                                           minute)
                 said = self.deliver.declared_for(due.date(), blk) if blk else ""
-                body = ("📦 block's ending — show me it.\n\n"
+                body = ("📦 time's up on that one — show me it.\n\n"
                         + (f"you said: <i>{html.escape(said)}</i>\n\n" if said else "")
                         + "photo of it, clock in the shot. this is the one that counts.")
                 await self.send_user(body)
