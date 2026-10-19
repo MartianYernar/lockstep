@@ -211,6 +211,125 @@ check("paying the drill does not unmiss the photo", db.one(
     "SELECT COUNT(*) c FROM checkpoints WHERE date=? AND state='missed'",
     (DAY.isoformat(),))["c"], 1)
 
+print("\n=== the simple version: a photo in the position ===")
+# 19 Oct: "is there something even simplier... maybe just a photo bro for now
+# without face that i am in push up position, and just trust me for now that i
+# made those 10 push ups".
+import io  # noqa: E402
+
+
+class PhotoChecker(StubValidator):
+    def __init__(self, in_position=True, face=False, reason="standing in a kitchen"):
+        super().__init__()
+        self.answer = {"in_position": in_position, "face_visible": face,
+                       "confidence": 0.9, "reason": reason, "unverified": False}
+        self.calls = 0
+
+    async def pushup_photo(self, blob, now, mime="image/jpeg"):
+        self.calls += 1
+        return dict(self.answer)
+
+
+async def _file():
+    async def dl():
+        from PIL import Image
+        buf = io.BytesIO(); Image.new("RGB", (60, 60)).save(buf, "JPEG")
+        return bytearray(buf.getvalue())
+    return types.SimpleNamespace(download_as_bytearray=dl)
+
+
+def photo_update():
+    u = FakeUpdate()
+    u.message.photo = [types.SimpleNamespace(get_file=_file)]
+    return u
+
+
+def with_photo(checker, **pen):
+    # Mirrors the live config from 19 Oct: push-ups only, photo proof, 10 reps.
+    pen.setdefault("sat", {"enabled": False})
+    cfg2, db2, led2, eng2, bot2 = make(pushups={"enabled": True, "photo": True,
+                                                "reps": 10}, **pen)
+    bot2.validator = checker
+    return cfg2, db2, led2, eng2, bot2
+
+
+cfg, db, led, eng, bot = with_photo(PhotoChecker())
+run(bot._owe_drill(N(18, 5), "target missed", "work: physics"))
+check("he is told the simple way", "photo in the position" in sent(bot)[-1], True)
+check("and how many", "10 push-ups" in sent(bot)[-1], True)
+check("the SAT drill is not offered any more", "SAT" in sent(bot)[-1], False)
+
+u = photo_update()
+bot.cfg.now = lambda: N(18, 10)
+run(bot.on_photo(u, None))
+check("a photo in the position clears it", bot.penalty.owed(), 0)
+check("he is told it is on trust", "on trust" in u.message.last, True)
+check("the siren stops", eng.agent_state(N(18, 11)).active, False)
+check("and the record says it was trusted, not verified", json.loads(db.one(
+    "SELECT payload FROM events WHERE kind='penalty_paid' ORDER BY id DESC"
+    )["payload"])["trusted"], True)
+
+cfg, db, led, eng, bot = with_photo(PhotoChecker(in_position=False))
+run(bot._owe_drill(N(18, 5), "target missed", "x"))
+u = photo_update()
+bot.cfg.now = lambda: N(18, 10)
+run(bot.on_photo(u, None))
+check("a photo of him standing around does not", bot.penalty.owed(), 1)
+check("and says what it saw", "kitchen" in u.message.last, True)
+
+cfg, db, led, eng, bot = with_photo(PhotoChecker(face=True))
+run(bot._owe_drill(N(18, 5), "target missed", "x"))
+u = photo_update()
+bot.cfg.now = lambda: N(18, 10)
+run(bot.on_photo(u, None))
+check("his face in frame is refused", bot.penalty.owed(), 1)
+check("with the fix, not a lecture", "camera lower" in u.message.last, True)
+
+print("\n=== /pushups ===")
+cfg, db, led, eng, bot = with_photo(PhotoChecker())
+u = FakeUpdate("/pushups")
+run(bot.cmd_pushups(u, None))
+check("nothing owed says so", "nothing owed" in u.message.last, True)
+run(bot._owe_drill(N(18, 5), "target missed", "x"))
+u = FakeUpdate("/pushups")
+run(bot.cmd_pushups(u, None))
+check("owed tells him to go", "10 push-ups" in u.message.last, True)
+check("and it waits for the photo", bot.pending[1]["action"], "pushup_photo")
+
+print("\n=== a checker that is down leaves him able to pay ===")
+
+
+class DeadPhoto(PhotoChecker):
+    async def pushup_photo(self, blob, now, mime="image/jpeg"):
+        return {"in_position": True, "face_visible": False, "confidence": 0.0,
+                "unverified": True, "reason": "couldn't reach it"}
+
+
+cfg, db, led, eng, bot = with_photo(DeadPhoto())
+run(bot._owe_drill(N(18, 5), "target missed", "x"))
+bot.cfg.now = lambda: N(18, 10)
+run(bot.on_photo(photo_update(), None))
+check("it counts", bot.penalty.owed(), 0)
+check("and is flagged unchecked", json.loads(db.one(
+    "SELECT payload FROM events WHERE kind='penalty_paid' ORDER BY id DESC"
+    )["payload"])["unverified"], True)
+
+print("\n=== the SAT road is closed while it is off ===")
+
+
+async def sat_off_case():
+    cfg2, db2, led2, eng2, bot2 = with_photo(PhotoChecker())
+    app = build_app(cfg2, eng2, led2)
+    tok = cfg2.api.get("sat_token") or cfg2.api["token"]
+    async with TestClient(TestServer(app)) as cl:
+        r = await cl.post(f"/agent/sat?token={tok}",
+                          json={"session": "z1", "score": 10, "total": 10, "seconds": 55})
+        body = await r.json()
+        check("a perfect drill does not pay it off now", body["ok"], False)
+        check("and says why", "not a way to pay" in body["error"], True)
+
+run(sat_off_case())
+
 print("\n=== push-ups, counted by the phone ===")
 cfg, db, led, eng, bot = make(pushups={"enabled": True, "reps": 20,
                                        "min_seconds_per_rep": 1.1,

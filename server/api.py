@@ -255,8 +255,9 @@ def build_app(cfg, engine, ledger) -> web.Application:
             body = dict(request.query)
         from .penalty import Penalties
         pen = Penalties(engine.db, cfg)
-        if not pen.enabled:
-            return web.json_response({"ok": False, "error": "penalties are off"})
+        if not pen.enabled or not pen.sat_on():
+            return web.json_response({"ok": False, "error": "the SAT drill is not a "
+                                                            "way to pay right now"})
         session = str(body.get("session") or "").strip()[:80]
         try:
             score = int(body.get("score"))

@@ -2926,6 +2926,17 @@ class LockstepBot:
             await self._grant_outside(update, pend, blob, mime, now)
             return
 
+        # A photo sent while a penalty is owed is the push-up photo -- either
+        # because he said /pushups, or because nothing else is waiting on a
+        # photo right now, so there is nothing else it could be.
+        if self.penalty.enabled and self.penalty.photo_ok() and self.penalty.owed():
+            asked_for_it = pend.get("action") == "pushup_photo"
+            nothing_else = self.engine.current_checkpoint(today, now) is None
+            if asked_for_it or nothing_else:
+                self.pending.pop(chat, None)
+                if await self._judge_pushup_photo(update, blob, mime, now):
+                    return
+
         if pend.get("action") == "rewrite_why":
             await self._rewrite_reason(update, getattr(update.message, "caption", None) or "",
                                        image=blob, mime=mime)
@@ -3232,13 +3243,17 @@ class LockstepBot:
             return                     # already at the day's cap
         self.ledger.append("penalty_owed", {"reason": reason, "label": label[:120]})
         p = self.penalty
-        ways = (f"⚡ that's one to pay off. either:\n"
-                f"• {p.questions()} SAT questions, {p.seconds_each()}s each, "
-                f"{p.pass_score()}/{p.questions()} to clear — {p.url()}\n"
-                + (f"• {p.reps()} push-ups, phone on the floor under your chest\n"
-                   if p.pushups_on() else "")
-                + f"\nsiren runs till one of them lands. {p.owed()} owed.")
-        await self.send_user(ways)
+        ways = [f"⚡ that's one to pay off. {p.owed()} owed."]
+        if p.pushups_on():
+            ways.append(f"• {p.reps()} push-ups"
+                        + (" — then send a photo in the position, no face"
+                           if p.photo_ok() else
+                           " — phone on the floor, it counts them"))
+        if p.sat_on():
+            ways.append(f"• {p.questions()} SAT questions, {p.seconds_each()}s each, "
+                        f"{p.pass_score()}/{p.questions()} — {p.url()}")
+        ways.append("siren runs till it lands.")
+        await self.send_user("\n".join(ways))
         self._app_note(now, f"he owes an SAT drill ({reason}: {label[:60]}); the siren "
                             "runs until the app reports a passing score")
 
@@ -3248,6 +3263,55 @@ class LockstepBot:
             f"✅ {result} — drill cleared."
             + (f" {left} still owed." if left else " nothing owed, siren's off. back to it."))
         self._app_note(now, f"he passed the drill ({result}); {left} still owed")
+
+    async def _judge_pushup_photo(self, update: Update, blob: bytes, mime: str,
+                                  now: datetime) -> bool:
+        """A photo of him in the position pays one off. True if it was one."""
+        p = self.penalty
+        row = p.next_one()
+        if row is None:
+            return False
+        data = await self.validator.pushup_photo(blob, now, mime=mime)
+        if not data.get("in_position"):
+            await update.message.reply_text(
+                f"❌ that's not a push-up position. {html.escape(data.get('reason') or '')}\n"
+                f"hands on the floor, body off the ground. {p.reps()} of them.")
+            p.bump(row["id"])
+            return True
+        if data.get("face_visible"):
+            await update.message.reply_text(
+                "❌ your face is in it. same photo, camera lower or turned away.")
+            return True
+        p.pay(row["id"], now, {"result": f"{p.reps()} push-ups (photo, trusted)",
+                               "trusted": True,
+                               "unverified": bool(data.get("unverified"))})
+        self.ledger.append("penalty_paid", {
+            "id": row["id"], "reason": row["reason"], "how": "pushup_photo",
+            "trusted": True, "unverified": bool(data.get("unverified"))})
+        left = p.owed()
+        self._save_photo(blob, now.date(), "pushups")
+        await update.message.reply_text(
+            f"✅ {p.reps()} push-ups, taken on trust. "
+            + (f"{left} still owed." if left else "siren's off. back to it."))
+        self._app_note(now, f"he paid a penalty with a push-up photo (count taken on "
+                            f"trust); {left} still owed")
+        return True
+
+    async def cmd_pushups(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/pushups -- say you're doing them, then send the photo."""
+        if not self._is_user(update):
+            return
+        p = self.penalty
+        if not (p.enabled and p.pushups_on()):
+            await update.message.reply_text("push-ups aren't a thing right now.")
+            return
+        if not p.owed():
+            await update.message.reply_text("nothing owed 👌 do them anyway if you want.")
+            return
+        self.pending[update.effective_chat.id] = {"action": "pushup_photo"}
+        await update.message.reply_text(
+            f"go. {p.reps()} push-ups, then a photo in the position — "
+            "hands on the floor, face out of frame.")
 
     async def cmd_drill(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/drill -- what is owed, and the link to pay it."""
@@ -4210,6 +4274,7 @@ class LockstepBot:
             ("eat", self.cmd_eat), ("food", self.cmd_eat),
             ("step", self.cmd_step), ("steps2", self.cmd_step),
             ("drill", self.cmd_drill), ("punish", self.cmd_drill),
+            ("pushups", self.cmd_pushups), ("pushup", self.cmd_pushups),
             ("events", self.cmd_reminders),
             ("night", self.cmd_night), ("basics", self.cmd_night),
             ("standup", self.cmd_standup), ("paper", self.cmd_paper),

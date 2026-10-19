@@ -90,6 +90,15 @@ class Penalties:
     def pushups_on(self) -> bool:
         return bool((self.conf.get("pushups") or {}).get("enabled", False))
 
+    def sat_on(self) -> bool:
+        """19 Oct he turned the SAT drill off as a way to pay: he wants the
+        physical one while he is building back strength."""
+        return bool((self.conf.get("sat") or {}).get("enabled", True))
+
+    def photo_ok(self) -> bool:
+        """A photo in the position, taken on trust for the count."""
+        return bool((self.conf.get("pushups") or {}).get("photo", False))
+
     def reps(self) -> int:
         return int((self.conf.get("pushups") or {}).get("reps", 20))
 

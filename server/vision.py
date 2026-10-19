@@ -329,6 +329,35 @@ he was fresh, and the only question now is whether it exists. Do not accept
 it is laid out differently from how you imagined it."""
 
 
+PUSHUP_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "in_position": {"type": "BOOLEAN"},
+        "face_visible": {"type": "BOOLEAN"},
+        "confidence": {"type": "NUMBER"},
+        "reason": {"type": "STRING"},
+    },
+    "required": ["in_position", "face_visible", "confidence", "reason"],
+}
+
+PUSHUP_PROMPT = """One photo. Is the person in it doing a push-up?
+
+in_position - true if a person is in a push-up or plank position: hands or
+  fists on the floor, body held off the ground roughly straight, arms taking
+  the weight. Mid-rep, top or bottom all count. The camera is usually on the
+  floor beside them or propped up, so expect a strange angle, bad light and
+  part of the body out of frame -- judge what you can see.
+  FALSE for someone standing, sitting, lying flat and resting, a photo of an
+  empty floor, or a picture of someone else's push-up on a screen.
+face_visible - true if their face is identifiable. He is told to keep it out
+  of frame; this is only so the app can tell him if it slipped in.
+confidence - 0.0 to 1.0 in your answer for in_position.
+reason - one short sentence to him. If it is false, say what you actually saw.
+
+Be generous about framing and strict about the body: the question is whether
+he is holding himself up on his hands, not whether the photo is pretty."""
+
+
 @dataclass
 class Verdict:
     ok: bool
@@ -475,6 +504,21 @@ class Validator:
                         break
                     raise
         raise last if last else RuntimeError("no models configured")
+
+    async def pushup_photo(self, image_bytes: bytes, now, mime: str = "image/jpeg") -> dict:
+        """Is he in the position? Never raises -- a checker that is down must
+        not leave him owing something he cannot pay."""
+        try:
+            data = await self._ask(image_bytes, mime, PUSHUP_PROMPT,
+                                   schema=PUSHUP_SCHEMA)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("push-up check failed: %s", exc)
+            return {"in_position": True, "face_visible": False, "confidence": 0.0,
+                    "unverified": True,
+                    "reason": f"Couldn't reach the checker ({str(exc)[:50]}). "
+                              "Taken on trust and flagged."}
+        data["unverified"] = False
+        return data
 
     async def delivered(self, image_bytes: bytes, declared: str, label: str,
                         minutes: int, now, mime: str = "image/jpeg",
