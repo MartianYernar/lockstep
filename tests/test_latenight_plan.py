@@ -186,4 +186,62 @@ check("the real end of tonight is in the context", "window ends 22:00" in ctx, T
 check("with the minutes left", "25 min left" in ctx, True)
 check("and that only the late night moves it", "/latenight" in ctx, True)
 
+print("\n=== 21:52: 'bro redo plan' is not his next ten-minute step ===")
+cfg, db, led, eng, bot = make()
+bot.cfg.raw["micro"] = {"enabled": True, "every_min": 10}
+bot.steps.ask(N(21, 50), "clean room")
+bot.cfg.now = lambda: N(21, 52)
+check("the loop leaves a request alone",
+      run(bot._handle_step_text(FakeUpdate("bro redo plan"), "bro redo plan", N(21, 52))),
+      False)
+check("and the question stays open", bot.steps.waiting(N(21, 52)) is not None, True)
+check("a real step is still taken",
+      run(bot._handle_step_text(FakeUpdate("wipe the desk"), "wipe the desk", N(21, 52))),
+      True)
+for s in ("redo the plan", "can u do it yourself", "remind me at 9", "plan for tomorrow"):
+    check(f"'{s}' is for Friday", bot._to_me(s), True)
+for s in ("plan the essay outline", "write intro paragraph", "solve q12-20",
+          "fill activities section"):
+    check(f"'{s}' is a step", bot._to_me(s), False)
+
+print("\n=== nor is it his target for the block ===")
+cfg, db, led, eng, bot = make(now=N(19, 0))
+bot.cfg.raw["deliver"] = {"enabled": True, "every_min": 25, "min_block_min": 25}
+db.run("INSERT INTO checkpoints (date, due_at, kind, state, block_id)"
+       " VALUES (?, ?, 'declare', 'asked', ?)",
+       (DAY.isoformat(), N(19, 30).isoformat(), db.blocks(DAY)[2]["id"]))
+check("a request is not locked in as his finish line",
+      run(bot._handle_declaration(FakeUpdate("redo the plan"), "redo the plan",
+                                  N(19, 31))), False)
+
+print("\n=== 'redo the plan' does not spend his late night ===")
+cfg, db, led, eng, bot = make()
+# Friday saw "imma run latenight" further up and decided for him.
+db.run("INSERT INTO coach_log (date, ts, role, text) VALUES (?, ?, 'user', ?)",
+       (DAY.isoformat(), N(21, 35).isoformat(), "bro imma run latenight"))
+seen = model(bot, [json.dumps({
+    "say": "send the late night pic to unlock the extra hours. got you, rebuilt it",
+    "actions": [{"type": "make_plan", "day": "today", "text": "doc tasks"},
+                {"type": "start_latenight", "text": "finishing doc tasks tonight"}]})])
+u = FakeUpdate("redo the plan")
+bot.cfg.now = lambda: N(21, 52)
+run(bot.on_text(u, None))
+replies = "\n".join(u.message.replies) if hasattr(u.message, "replies") else u.message.last
+check("no late-night photo is asked for",
+      (bot.pending.get(1) or {}).get("action") == "latenight_photo", False)
+check("no 'rebuilt it' that never happened", "rebuilt" in replies, False)
+check("he gets the honest short window instead", "8 min" in replies, True)
+check("with the one way to get more, if he wants it", "/latenight" in replies, True)
+
+print("\n=== but asking for it in so many words still works ===")
+cfg, db, led, eng, bot = make()
+seen = model(bot, [json.dumps({
+    "say": "ok, pic first",
+    "actions": [{"type": "start_latenight", "text": "KAIST essay due at midnight"}]})])
+u = FakeUpdate("imma run latenight, KAIST essay due at midnight")
+bot.cfg.now = lambda: N(21, 52)
+run(bot.on_text(u, None))
+check("the photo is asked for", (bot.pending.get(1) or {}).get("action"),
+      "latenight_photo")
+
 sys.exit(report("LATE NIGHT / SHORT WINDOW"))

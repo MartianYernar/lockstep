@@ -904,10 +904,10 @@ actually told you, never guessed:
   preference, a person, how his school works. Short, in your words, dated
   facts with the date. Don't remember what's already a task or event.
 - {"type":"forget","text":"m12"}  a memory above turned out wrong or old.
-- {"type":"start_latenight","text":"the reason, in his words"}  whenever he
-  says he is working past the end of today's window or is still out -- "imma
-  run latenight", "staying up for this", "finishing it tonight" -- not only
-  after bedtime. The app then asks him for a photo showing it; that buys 2
+- {"type":"start_latenight","text":"the reason, in his words"}  only when
+  THIS message of his asks to work past the end of the day or says he is
+  still out -- "imma run latenight", "staying up for this". Something he said
+  earlier in the chat does not count: it is his once-a-week, he spends it. The app then asks him for a photo showing it; that buys 2
   hours, once a week, and the day's plan is rebuilt over the longer evening.
   Don't promise it's granted -- the photo decides. If he wants a plan in the
   same message, send make_plan too: the app does the late night first.

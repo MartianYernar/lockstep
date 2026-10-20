@@ -1026,7 +1026,28 @@ class LockstepBot:
     # the rest" or "made room for it" that leaves the plan untouched.
     STRONG_CLAIM = re.compile(
         r"\b(resched(?:uled)?|replann?ed|rewrote|rearrang(?:ed)?|made (?:you )?room|"
-        r"freed up|sorted the (?:rest|day)|fixed the (?:plan|day))\b", re.I)
+        r"freed up|sorted the (?:rest|day)|fixed the (?:plan|day)|"
+        r"rebuilt|rebuilding|redid|redone|redoing|built (?:it|the|you|a))\b", re.I)
+
+    # Him talking TO the bot, not answering it. 20 Oct 21:52 "bro redo plan"
+    # was filed as his next ten-minute step and answered "go. tell me when
+    # it's done." Anything that asks the bot to do something, or names the
+    # plan, the siren or the late night, goes to Friday.
+    TO_ME = re.compile(
+        r"\b(re-?do|re-?plan|re-?build|re-?make|re-?schedule|"
+        r"(?:the|my|a|new|today'?s|tomorrow'?s) (?:plan|schedule|day)|"
+        r"plan (?:for (?:today|tomorrow|me)|it|tomorrow|today)|"
+        r"remind|late ?night|siren|can (?:you|u)|could (?:you|u)|will (?:you|u)|"
+        r"(?:you|u) (?:do|make|build|redo|fix|change|move|add|put)|"
+        r"pls|please|wtf|why|stop|cancel|skip)\b", re.I)
+
+    LATE_ASK = re.compile(
+        r"late ?night|stay(?:ing)? up|all[- ]?nighter|work(?:ing)? late|"
+        r"past (?:bed|midnight|10|22)|(?:till|until|to) (?:midnight|12|1|2)\b|"
+        r"(?:finish|do)(?:ing)? (?:it |this |them |everything )?tonight", re.I)
+
+    def _to_me(self, text: str) -> bool:
+        return bool(self.TO_ME.search(text or ""))
 
     def _claims_change(self, reply: str) -> bool:
         """Does this sentence say the day was rearranged?"""
@@ -2016,7 +2037,8 @@ class LockstepBot:
     async def _handle_declaration(self, update: Update, text: str,
                                   now: datetime) -> bool:
         """Take the finish line he just named, if one is owed. True if taken."""
-        if not self.deliver.enabled or len(text) < 3 or text.startswith("/"):
+        if not self.deliver.enabled or len(text) < 3 or text.startswith("/") \
+                or self._to_me(text):
             return False
         day, minute = now.date(), now.hour * 60 + now.minute
         cp = self.db.one(
@@ -2089,7 +2111,7 @@ class LockstepBot:
         waiting = st.waiting(now)
         if waiting is None:
             return False
-        if text.startswith("/") or "?" in text:
+        if text.startswith("/") or "?" in text or self._to_me(text):
             return False
         st.set_step(waiting["id"], text, now)
         await self.send_user("👊 go. tell me when it's done.")
@@ -3576,6 +3598,19 @@ class LockstepBot:
             return
         want_plan, self.coach.last_make_plan = self.coach.last_make_plan, None
         late, self.coach.last_latenight = self.coach.last_latenight, None
+        # Past bedtime the bed siren is already asking, so anything he says
+        # about a deadline is the ask. Before it, only his own words count.
+        if late is not None and self.engine.bed_night(now) is None                 and not self.LATE_ASK.search(text):
+            # Friday read "latenight" further up the chat and decided for him.
+            # It's his once-a-week; only his own words in this message spend it.
+            log.info("dropped a late night he didn't ask for: %r", text[:80])
+            late = None
+            if out and re.search(r"late ?night|extra hours|unlock", out, re.I):
+                out = ""
+        if want_plan is not None and out and self._claims_change(out):
+            # The plan isn't built yet -- the proposal (or the honest "8 min
+            # left") is what speaks. 20 Oct: "got you, rebuilt it" and nothing.
+            out = ""
         if late is not None:
             # The extension decides how long the day is, so it goes first and
             # the plan is built after the photo lands -- otherwise the plan is
