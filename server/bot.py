@@ -1196,6 +1196,8 @@ class LockstepBot:
         """
         if not self.coach.enabled or self.coach.budget_left(now.date()) <= 0:
             return False
+        if await self._too_little_left(update, day, now):
+            return True
         await update.message.chat.send_action("typing")
         try:
             blocks, note = await self.dayplanner.build(day, text, now,
@@ -1229,6 +1231,55 @@ class LockstepBot:
                 InlineKeyboardButton("✅ lock it", callback_data=f"plan:ok:{pid}"),
                 InlineKeyboardButton("🔁 redo", callback_data=f"plan:redo:{pid}")]]))
         return True
+
+    async def _too_little_left(self, update: Update, day: date,
+                               now: datetime) -> bool:
+        """Say how many minutes are actually left instead of planning them.
+
+        20 Oct, 21:35: asked to redo the day with 25 minutes to go, it wrote
+        one block holding four tasks and a note saying it had covered them
+        all. Four tasks do not go in 25 minutes, and a plan that says they do
+        teaches him the plan is decoration.
+        """
+        if day != now.date():
+            return False
+        start = self.cfg.plan_start_for(day, now)
+        end = self.engine.plan_end(day)
+        left = end - start
+        if left >= int((self.cfg.raw.get("plan", {}) or {})
+                       .get("min_window_min", 45)):
+            return False
+        ends = f"{end//60:02d}:{end%60:02d}"
+        if left <= 0:
+            await update.message.reply_text(
+                f"the day's done at {ends}. nothing left to plan tonight — "
+                "want me to write tomorrow instead?")
+            return True
+        todo = await self._whats_left(day, now)
+        head = (f"⏳ it's {now:%H:%M}. <b>{left} min</b> before the day ends at "
+                f"{ends}. that's one thing, not a list.")
+        body = ""
+        if todo:
+            body = ("\n\nstill open:\n"
+                    + "\n".join(f"• {html.escape(t)}" for t in todo[:5])
+                    + f"\n\npick ONE and tell me which — the rest is tomorrow's.")
+        tail = ("\n\nif you actually need the extra hours tonight: "
+                "<code>/latenight why</code> — 2h, once a week, needs a pic.")
+        await update.message.reply_text(head + body + tail, parse_mode=ParseMode.HTML)
+        return True
+
+    async def _whats_left(self, day: date, now: datetime) -> list[str]:
+        """His own unticked lines for today, doc first, then the task list."""
+        out = []
+        try:
+            if self.doc is not None and self.doc.enabled:
+                sec = await self.doc.for_day(day, now)
+                out = [i["text"] for i in self.doc.open_items(sec)]
+        except Exception as exc:                              # noqa: BLE001
+            log.info("doc lookup for the short window failed: %s", exc)
+        if not out:
+            out = [t["title"] for t in self.tasks.open()][:5]
+        return out
 
     async def _chat_make_plan(self, update: Update, want: dict, now: datetime) -> None:
         """He asked Friday to build it. One day is offered; several are locked in."""
@@ -3137,6 +3188,9 @@ class LockstepBot:
             f"🌙 {self.cfg.user_name} used the weekly late night ({hours}h).\n"
             f"Reason: <i>{html.escape(reason)}</i>\n"
             f"Bedtime tonight moves to {new_bed:%H:%M}.")
+        then = pend.get("then_plan")
+        if then is not None:
+            await self._chat_make_plan(update, then, now)
 
     async def _grant_outside(self, update: Update, pend: dict, blob: bytes,
                              mime: str, now: datetime) -> None:
@@ -3521,16 +3575,24 @@ class LockstepBot:
             await self._lock_proposal(update, waiting)
             return
         want_plan, self.coach.last_make_plan = self.coach.last_make_plan, None
+        late, self.coach.last_latenight = self.coach.last_latenight, None
+        if late is not None:
+            # The extension decides how long the day is, so it goes first and
+            # the plan is built after the photo lands -- otherwise the plan is
+            # written against hours he is about to stop having.
+            if out:
+                await update.message.reply_text(out[:3900])
+            await self.cmd_latenight(update, None, reason=late or text)
+            pend = self.pending.get(update.effective_chat.id) or {}
+            if want_plan is not None and pend.get("action") == "latenight_photo":
+                pend["then_plan"] = want_plan
+            elif want_plan is not None:
+                await self._chat_make_plan(update, want_plan, now)
+            return
         if want_plan is not None:
             if out:
                 await update.message.reply_text(out[:3900])
             await self._chat_make_plan(update, want_plan, now)
-            return
-        late, self.coach.last_latenight = self.coach.last_latenight, None
-        if late is not None:
-            if out:
-                await update.message.reply_text(out[:3900])
-            await self.cmd_latenight(update, None, reason=late or text)
             return
         recheck, self.coach.last_recheck = self.coach.last_recheck, None
         if recheck and self._live_reject(now):

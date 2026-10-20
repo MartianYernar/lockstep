@@ -171,6 +171,13 @@ class DayPlanner:
         self.doc = doc
         self._doc_text = ""
 
+    def plan_end(self, day: date) -> int:
+        """Where the day stops -- later tonight if he earned a late night."""
+        eng = getattr(self.coach, "engine", None)
+        if eng is not None and hasattr(eng, "plan_end"):
+            return eng.plan_end(day)
+        return self.cfg.enforce_end_for(day)
+
     def _routines(self, day: date) -> str:
         r = getattr(self.coach, "routines", None)
         rows = r.for_day(day) if r is not None else []
@@ -263,7 +270,7 @@ class DayPlanner:
         of starting again.
         """
         start = self.cfg.plan_start_for(day, now)
-        end = self.cfg.enforce_end_for(day)
+        end = self.plan_end(day)
         if start >= end:
             raise planner.PlanError(
                 "today's window is over -- want me to do tomorrow instead?")
@@ -299,11 +306,24 @@ class DayPlanner:
                 if routines is not None:
                     blocks = routines.overlay(day, blocks, start, end, planner)
                 planner.validate_coverage(blocks, start, end)
+                self._no_cramming(blocks)
                 return blocks, note
             except planner.PlanError as exc:
                 error = str(exc)
                 log.info("dayplan attempt %d rejected: %s", attempt + 1, error)
         raise planner.PlanError(error or "I couldn't build a plan that covers the window.")
+
+    @staticmethod
+    def _no_cramming(blocks: list) -> None:
+        """Reject a block that is a to-do list wearing one label."""
+        for b in blocks:
+            parts = [p for p in re.split(r",|;| and | & ", b.label) if p.strip()]
+            mins = b.end_min - b.start_min
+            if len(parts) >= 3 and mins < 45:
+                raise planner.PlanError(
+                    f'"{b.label}" is {len(parts)} different tasks in {mins} minutes. '
+                    "One task per block, and only what actually fits -- leave the "
+                    "rest out rather than listing it.")
 
     @staticmethod
     def _parse(raw: str) -> tuple[list, str]:

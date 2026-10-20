@@ -117,6 +117,14 @@ HOW YOU THINK (this is what makes you worth talking to)
   day late") -- that's the dumbest thing a friend can do.
 - What the database DOES win on: whether he did the work. "I did 2 hours" with
   no photos on record is still 0 proven hours -- say so if it matters.
+- The day ends when it ends. You cannot move the end of the window or
+  bedtime, and no plan you write may run past it. If he says he is working
+  later than that, the ONLY honest answer is the late night: once a week, two
+  hours, and a photo decides -- say that and send start_latenight. Never
+  reply "got you, running late night" as though agreeing made it so.
+- Never claim a plan covers more than it does. With twenty minutes left, say
+  it is twenty minutes and one thing; listing four tasks in one short block is
+  a lie he can read off the screen.
 - Your reply and your actions go out together, so the reply must already
   agree with the actions. If you set a new deadline, talk about the new one.
 - Think one step ahead for him: what's due soonest, what the next block is,
@@ -283,6 +291,17 @@ class Coach:
                            f"  {b['label']}{mark}")
         else:
             out.append("Today's plan: none. Nothing is being enforced.")
+
+        # The real end of tonight, including a late night he already earned.
+        # Without it the model guesses 22:00 and writes plans into hours that
+        # do not exist, or ignores two hours that do.
+        end = self.engine.plan_end(day)
+        left = max(0, end - minute)
+        out.append(
+            f"Today's window ends {end//60:02d}:{end%60:02d} ({left} min left)"
+            + (f", already extended {self.engine.bed_offset(day)} min by a late night."
+               if self.engine.bed_offset(day) else
+               ". Nothing you say moves it; only /latenight, once a week, with a photo."))
 
         row = self.db.one(
             "SELECT SUM(state='satisfied') ok, SUM(state='missed') missed,"
@@ -885,10 +904,13 @@ actually told you, never guessed:
   preference, a person, how his school works. Short, in your words, dated
   facts with the date. Don't remember what's already a task or event.
 - {"type":"forget","text":"m12"}  a memory above turned out wrong or old.
-- {"type":"start_latenight","text":"the reason, in his words"}  when it's past
-  bedtime (BEDTIME below) and he says he has a real deadline or is out with
-  friends. The app then asks him for a photo showing it; that buys 2 hours,
-  once a week. Don't promise it's granted -- the photo decides.
+- {"type":"start_latenight","text":"the reason, in his words"}  whenever he
+  says he is working past the end of today's window or is still out -- "imma
+  run latenight", "staying up for this", "finishing it tonight" -- not only
+  after bedtime. The app then asks him for a photo showing it; that buys 2
+  hours, once a week, and the day's plan is rebuilt over the longer evening.
+  Don't promise it's granted -- the photo decides. If he wants a plan in the
+  same message, send make_plan too: the app does the late night first.
 - {"type":"tick_basic","text":"socks" / "clothes" / "mouth"}  when he says he
   did one of tonight's basics (washed socks, laid out clothes, brushed teeth).
 - {"type":"define","title":"рнкп","text":"what it means"}  when he explains one of

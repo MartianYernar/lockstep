@@ -235,7 +235,7 @@ class Engine:
         # nothing is allowed to borrow from, at either end of the day -- not an
         # overrun, not an emergency offset, and not an ambitious 4am block.
         start = max(start, self.cfg.earliest_min)
-        end = min(end, self.cfg.hard_end_min)
+        end = min(end, self.cfg.hard_end_min + self.bed_offset(day))
         return start, max(start, end)
 
     # -- the end of the day ----------------------------------------------------
@@ -295,6 +295,16 @@ class Engine:
     def bed_offset(self, day: date) -> int:
         row = self.db.day(day)
         return int(row["bed_offset_minutes"] or 0) if row else 0
+
+    def plan_end(self, day: date) -> int:
+        """The last minute a plan for that day may reach.
+
+        Normally the window's end. After a /latenight is granted it is that
+        plus the hours it bought -- 20 Oct he earned two hours and the planner
+        still stopped at 22:00, so the extension bought him a later bed photo
+        and nothing to do before it.
+        """
+        return self.cfg.enforce_end_for(day) + self.bed_offset(day)
 
     def bed_due(self, day: date) -> datetime:
         """When the bed photo is asked for, including any /latenight offset."""
