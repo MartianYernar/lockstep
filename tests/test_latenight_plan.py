@@ -244,4 +244,19 @@ run(bot.on_text(u, None))
 check("the photo is asked for", (bot.pending.get(1) or {}).get("action"),
       "latenight_photo")
 
+print("\n=== a dated run of later nights (20 Oct: 'work till 12 til 23rd') ===")
+cfg, db, led, eng, bot = make(now=N(22, 22))
+cfg.raw["sleep"] = dict(cfg.raw.get("sleep") or {}, extended=[
+    {"from": "2026-08-25", "to": "2026-08-27", "minutes": 120}])
+check("tonight runs to midnight", eng.plan_end(DAY), 24 * 60)
+check("so 22:22 is inside the window and /replan works", eng.in_window(N(22, 22)), True)
+check("the bed photo moves with it", f"{eng.bed_due(DAY):%H:%M}", "00:20")
+check("the last night of the run too", eng.plan_end(DAY + timedelta(days=2)), 24 * 60)
+check("and the night after it is back to normal",
+      eng.plan_end(DAY + timedelta(days=3)), 22 * 60)
+check("it is not his weekly /latenight",
+      int(db.day(DAY)["bed_offset_minutes"] or 0), 0)
+db.run("UPDATE days SET bed_offset_minutes=120 WHERE date=?", (DAY.isoformat(),))
+check("and a /latenight on top doesn't stack to 2am", eng.plan_end(DAY), 24 * 60)
+
 sys.exit(report("LATE NIGHT / SHORT WINDOW"))

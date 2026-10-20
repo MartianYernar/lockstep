@@ -218,7 +218,7 @@ class Engine:
         # school ends, which left every Saturday and Sunday morning outside the
         # system entirely.
         start = self.cfg.enforce_start_for(day)
-        end = self.cfg.enforce_end_for(day) + shift
+        end = self.plan_end(day) + shift
 
         # The plan may reach outside the usual hours -- an hour of work before
         # school, say. Those blocks carry proof like any other, so the window
@@ -293,8 +293,26 @@ class Engine:
         return until
 
     def bed_offset(self, day: date) -> int:
+        """Minutes tonight runs late: a /latenight he earned, or a dated
+        stretch in sleep.extended -- whichever is longer, never both."""
         row = self.db.day(day)
-        return int(row["bed_offset_minutes"] or 0) if row else 0
+        earned = int(row["bed_offset_minutes"] or 0) if row else 0
+        return max(earned, self.extended(day))
+
+    def extended(self, day: date) -> int:
+        """Later nights he set for a run of dates. 20 Oct: KAIST and the brag
+        sheets, "work till 12 til 23rd october". It has an end date, so it
+        ends by itself; it does not count as his weekly /latenight."""
+        best = 0
+        for x in self._sleep_conf().get("extended", []) or []:
+            try:
+                lo = date.fromisoformat(str(x["from"]))
+                hi = date.fromisoformat(str(x["to"]))
+            except (KeyError, ValueError):
+                continue
+            if lo <= day <= hi:
+                best = max(best, int(x.get("minutes", 0)))
+        return best
 
     def plan_end(self, day: date) -> int:
         """The last minute a plan for that day may reach.
