@@ -432,7 +432,13 @@ class Validator:
     def _get_client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(api_key=self.cfg.raw["gemini"]["api_key"])
+            from google.genai import types
+            # A model answering 503 held a photo ~47 s before the chain moved
+            # on (21 Oct). A ceiling per call: past it, the next model gets it.
+            secs = int(self.cfg.raw["gemini"].get("timeout_s", 25))
+            self._client = genai.Client(
+                api_key=self.cfg.raw["gemini"]["api_key"],
+                http_options=types.HttpOptions(timeout=secs * 1000))
         return self._client
 
     def _model_chain(self) -> list[str]:
@@ -498,7 +504,8 @@ class Validator:
                         continue
                     if any(k in text for k in ("RESOURCE_EXHAUSTED", "429",
                                                "UNAVAILABLE", "503", "INTERNAL", "500",
-                                               "INVALID_ARGUMENT")):
+                                               "INVALID_ARGUMENT", "imeout",
+                                               "imed out", "ReadTimeout")):
                         log.warning("%s unusable (%s), trying the next model",
                                     model, text.split(".")[0][:40])
                         break

@@ -1,6 +1,7 @@
 """Telegram interface."""
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import os
@@ -2965,6 +2966,34 @@ class LockstepBot:
     # ======================================================================
     # photos and free text
     # ======================================================================
+    async def on_error(self, update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Anything a handler didn't catch. Before 21 Oct there was no handler
+        at all: a photo whose download timed out got no answer, ever."""
+        err = getattr(ctx, "error", None)
+        log.error("handler failed: %r", err, exc_info=err)
+        msg = getattr(update, "effective_message", None)
+        if msg is None or not self._is_user(update):
+            return
+        what = "pic" if getattr(msg, "photo", None) else "message"
+        try:
+            await msg.reply_text(
+                f"⚠️ telegram dropped that {what} on my end — send it again.")
+        except Exception:                                     # noqa: BLE001
+            pass
+
+    async def _download(self, photo) -> bytes:
+        """Telegram's file endpoint is slow now and then; try three times."""
+        last = None
+        for attempt in range(3):
+            try:
+                tg_file = await photo.get_file()
+                return bytes(await tg_file.download_as_bytearray())
+            except Exception as exc:                          # noqa: BLE001
+                last = exc
+                log.warning("photo download attempt %d failed: %r", attempt + 1, exc)
+                await asyncio.sleep(1 + attempt)
+        raise last
+
     async def on_photo(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._is_user(update):
             return
@@ -2974,8 +3003,7 @@ class LockstepBot:
         pend = self.pending.get(chat, {})
 
         photo = update.message.photo[-1]
-        tg_file = await photo.get_file()
-        raw = bytes(await tg_file.download_as_bytearray())
+        raw = await self._download(photo)
 
         priv = self.cfg.raw.get("privacy", {})
         if priv.get("warn_on_gps", True) and images.has_gps(raw):
@@ -4360,8 +4388,30 @@ class LockstepBot:
 
     # ======================================================================
     def build(self) -> Application:
-        app = Application.builder().token(self.cfg.bot_token).build()
+        # 21 Oct: get_file died on the 5-second default read timeout three
+        # times in half an hour, and every update waited for the one before
+        # it -- a photo queued behind a 30-second Friday reply. Photos and
+        # talk now run side by side; each kind is still one at a time.
+        app = (Application.builder().token(self.cfg.bot_token)
+               .concurrent_updates(True)
+               .connection_pool_size(16).pool_timeout(15)
+               .connect_timeout(10).read_timeout(30).write_timeout(30)
+               .build())
         self.app = app
+        talk, pics = asyncio.Lock(), asyncio.Lock()
+
+        def serial(lock, fn, ack=False):
+            async def run(update, ctx):
+                if ack:
+                    # Seen, instantly, before any queue or model: he knows it
+                    # landed even when the check takes a while.
+                    try:
+                        await update.message.set_reaction("👀")
+                    except Exception:                         # noqa: BLE001
+                        pass
+                async with lock:
+                    return await fn(update, ctx)
+            return run
         for name, fn in [
             ("start", self.cmd_start), ("help", self.cmd_help), ("status", self.cmd_status),
             ("plan", self.cmd_plan), ("today", self.cmd_today), ("offset", self.cmd_offset),
@@ -4395,10 +4445,13 @@ class LockstepBot:
             ("pause", self.cmd_pause),
             ("resume", self.cmd_resume), ("extend", self.cmd_extend), ("report", self.cmd_report),
         ]:
-            app.add_handler(CommandHandler(name, fn))
-        app.add_handler(CallbackQueryHandler(self.on_button))
-        app.add_handler(MessageHandler(filters.PHOTO, self.on_photo))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
+            app.add_handler(CommandHandler(name, serial(talk, fn)))
+        app.add_handler(CallbackQueryHandler(serial(talk, self.on_button)))
+        app.add_handler(MessageHandler(filters.PHOTO,
+                                       serial(pics, self.on_photo, ack=True)))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                       serial(talk, self.on_text)))
+        app.add_error_handler(self.on_error)
         app.job_queue.run_repeating(self.tick, interval=30, first=10, name="tick")
         return app
 
