@@ -95,7 +95,8 @@ def main() -> None:
         await bot.publish_command_menu(application)
 
         from aiohttp import web
-        runner = web.AppRunner(build_app(cfg, engine, ledger))
+        from .api import make_runner
+        runner = make_runner(build_app(cfg, engine, ledger))
         await runner.setup()
         site = web.TCPSite(runner, cfg.api["host"], cfg.api_port)
         await site.start()

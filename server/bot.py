@@ -2024,6 +2024,11 @@ class LockstepBot:
         # than arriving as a second notification.
         if self._photo_due_near(day, blk["id"], now):
             return
+        # Something is already owed -- a target, a photo -- and the siren is
+        # on it. That IS the next step; a second question on top is how his
+        # step answer became his target on 21 Oct.
+        if self.engine.current_checkpoint(day, now) is not None:
+            return
         if not self.db.claim(f"microstep:{day}:{minute}"):
             return
         open_step = st.open_step(now)
@@ -2034,6 +2039,61 @@ class LockstepBot:
                 "done? say so and tell me the next one. or just send the next step.")
         else:
             await self.send_user(f"⏱ {st.question(n)}")
+
+    SIREN_Q = re.compile(
+        r"siren|ringing|alarm|what (?:do|should|shall) i send|"
+        r"what (?:do|does) (?:you|u|it) want|what(?:'s| is) (?:owed|due)|"
+        r"how (?:do|to) (?:i )?stop", re.I)
+
+    def _owed_lines(self, day: date, now: datetime) -> list[str]:
+        """Everything the siren is waiting on, in the words of what to send."""
+        out = []
+        blocks = {b["id"]: b for b in self.db.blocks(day)}
+        for c in self.engine.open_checkpoints(day):
+            due = datetime.fromisoformat(c["due_at"])
+            if due > now:
+                continue
+            blk = blocks.get(c["block_id"])
+            label = html.escape(blk["label"]) if blk else "this block"
+            minute = due.hour * 60 + due.minute
+            if c["kind"] == "declare":
+                seg = self.deliver.current(day, list(blocks.values()), minute)
+                ends = seg["end_min"] if seg else minute + 25
+                out.append(f"🎯 <b>one line of text</b>: what will exist at "
+                           f"{ends//60:02d}:{ends%60:02d} that doesn't now ({label})")
+            elif c["kind"] == "deliver":
+                seg = self.deliver.current(day, list(blocks.values()), minute)
+                said = self.deliver.declared_for(day, seg) if seg else ""
+                out.append("📦 <b>a photo of what you said you'd make</b>"
+                           + (f": <i>{html.escape(said)}</i>" if said else f" ({label})"))
+            elif c["kind"] == "bed":
+                out.append("🛏 <b>a photo of your bed, opened</b>")
+            else:
+                out.append(f"📸 <b>a photo of you on it</b> — {label}, clock in the shot")
+        if self.penalty.enabled and self.penalty.owed():
+            out.append(f"💪 <b>push-ups</b>: {self.penalty.reps()}, then "
+                       "<code>/pushups</code> and a photo in position")
+        return out
+
+    async def _siren_answer(self, update: Update, text: str, now: datetime) -> bool:
+        if not self.SIREN_Q.search(text or "") or len(text) > 200:
+            return False
+        lines = self._owed_lines(now.date(), now)
+        if not lines:
+            if self.engine.debt_seconds(now.date(), now) > 0 \
+                    and not self.engine.has_plan(now.date()):
+                body = "no plan is locked for today — send one (or /plan) and it stops."
+            else:
+                body = ("nothing's owed right now. if it's still ringing, the phone "
+                        "hasn't checked in yet — give it a minute.")
+        else:
+            body = ("to stop it, send:\n\n" + "\n".join(lines)
+                    + ("\n\nall of them — it stops when the last one lands."
+                       if len(lines) > 1 else ""))
+        await update.message.reply_text(body, parse_mode=ParseMode.HTML)
+        self._app_note(now, "he asked why the siren was going; told him: "
+                            + "; ".join(re.sub(r"<[^>]+>", "", x) for x in lines)[:300])
+        return True
 
     async def _handle_declaration(self, update: Update, text: str,
                                   now: datetime) -> bool:
@@ -3002,6 +3062,16 @@ class LockstepBot:
         chat = update.effective_chat.id
         pend = self.pending.get(chat, {})
 
+        # 21 Oct: "to attach the 10th grade and 11th grade files" came as the
+        # caption on a photo, answering "what's the next small step?", and was
+        # dropped. A waiting step question takes it.
+        cap = (getattr(update.message, "caption", None) or "").strip()
+        if cap and self.steps.enabled and not self._to_me(cap) \
+                and pend.get("action") is None:
+            waiting = self.steps.waiting(now)
+            if waiting is not None:
+                self.steps.set_step(waiting["id"], cap, now)
+
         photo = update.message.photo[-1]
         raw = await self._download(photo)
 
@@ -3495,6 +3565,12 @@ class LockstepBot:
                 return
         if action == "disable_reason":
             await self._handle_disable_reason(update, text)
+            return
+
+        # "why is the siren going / what do i send" is answered from the
+        # record, before anything can mistake it for a step or a target.
+        if self._is_user(update) and await self._siren_answer(
+                update, text, self.cfg.now()):
             return
 
         # A declaration is owed before anything else is read: the block is

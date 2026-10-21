@@ -9,11 +9,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 
 from aiohttp import web
+from aiohttp.web_log import AccessLogger
 
 log = logging.getLogger("api")
+
+# ?token=... (and ?sat_token=...) anywhere in a logged URL, Referer included.
+_TOKEN_IN_URL = re.compile(r"([?&;][A-Za-z_]*token=)[^&;\s\"]*", re.IGNORECASE)
+
+
+def redact(text: str) -> str:
+    return _TOKEN_IN_URL.sub(r"\1REDACTED", text)
+
+
+class RedactingAccessLogger(AccessLogger):
+    """aiohttp's access log, minus the token.
+
+    The phone polls /agent/gap?token=... every ~14 s and the default logger
+    writes the whole URL, so 21 Oct 2026 the secret was sitting in every page
+    of `railway logs`. Anyone who could read the logs could be the phone. The
+    query param stays (Automate sends it that way); only the log forgets it.
+    Scrubbing every value also cleans the `extra` dict a JSON handler would see.
+    """
+
+    def _format_line(self, request, response, time):
+        return [(key, redact(value) if isinstance(value, str) else value)
+                for key, value in super()._format_line(request, response, time)]
 
 
 def _authorised(request: web.Request, token: str) -> bool:
@@ -402,9 +426,15 @@ async def heartbeat_loop(cfg, ledger) -> None:
         await asyncio.sleep(every)
 
 
+def make_runner(app: web.Application) -> web.AppRunner:
+    """Every place that serves the API goes through here, so none forgets the
+    redacting access log."""
+    return web.AppRunner(app, access_log_class=RedactingAccessLogger)
+
+
 async def start(cfg, engine, ledger) -> web.AppRunner:
     app = build_app(cfg, engine, ledger)
-    runner = web.AppRunner(app)
+    runner = make_runner(app)
     await runner.setup()
     site = web.TCPSite(runner, cfg.api["host"], cfg.api_port)
     await site.start()
